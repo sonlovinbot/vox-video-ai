@@ -1,0 +1,92 @@
+{
+  "task": "transcribe",
+  "language": "Vietnamese",
+  "duration": 43.84,
+  "text": " Bạn nhấn đặt mua đơn 39K, điều gì xảy ra sau đó? Hệ thống xác nhận, người bán nhận thông tin sản phẩm, người bán in mã ",
+  "words": [
+    {
+      "word": "Bạn",
+      "start": 0,
+      "end": 0.26
+    },
+    {
+      "word": "nhấn",
+      "start": 0.26,
+      "end": 0.48
+    },
+    {
+      "word": "đặt",
+      "start": 0.48,
+      "end": 0.8
+    },
+    {
+      "word": "mua",
+      "start": 0.8,
+      "end": 1.04
+    },
+    {
+      "word": "đơn",
+      "start": 1.04,
+      "end": 1.22
+    },
+    {
+      "word": "39K,",
+      "start": 1.22,
+      "end": 2.52
+    },
+    {
+      "word": "điều",
+      "start": 2.52,
+      "end": 2.62
+    },
+    {
+      "word": "gì",
+      "start": 2.62,
+      "end": 2.8
+    },
+    {
+      "word": "xảy",
+      "start": 2.8,
+      "end": 3.04
+    },
+    {
+      "word": "ra",
+      "start": 3.04,
+      "end": 3.16
+    },
+    {
+      "word": "sau",
+      "start": 3.16,
+      "end": 3.38
+    },
+    {
+      "word": "đó?",
+      "start": 3.38,
+      "end": 4.06
+    },
+    {
+      "word": "Hệ",
+      "start": 4.48,
+      "end": 4.64
+    },
+    {
+      "word": "thống",
+      "start": 4.64,
+      "end": 4.86
+    }
+  ],
+  "segments": [
+    {
+      "id": 0,
+      "start": 0,
+      "end": 3.58,
+      "text": " Bạn nhấn đặt mua đơn 39K, điều gì xảy ra sau đó?"
+    },
+    {
+      "id": 1,
+      "start": 4.46,
+      "end": 10.82,
+      "text": " Hệ thống xác nhận, người bán nhận thông tin sản phẩm, người bán in mã vận đơn và dán lên kiện hàng."
+    }
+  ]
+}
