@@ -171,6 +171,10 @@ export function CastingStep({
           beat.refPlan.searchQuery,
           project.config.aspectRatio,
           settings.imageSearchCount,
+          [
+            ...(settings.searchPexels ? (["pexels"] as const) : []),
+            ...(settings.searchSerper ? (["serper"] as const) : []),
+          ],
         );
         if (!result.images.length) throw new Error("Không tìm thấy ảnh phù hợp.");
         patchBeat(beat.id, (current) => ({
@@ -435,6 +439,10 @@ export function CastingStep({
           initialQuery={searchBeat.refPlan.searchQuery}
           aspectRatio={project.config.aspectRatio}
           count={settings.imageSearchCount}
+          enabledSources={[
+            ...(settings.searchPexels ? (["pexels"] as const) : []),
+            ...(settings.searchSerper ? (["serper"] as const) : []),
+          ]}
           selectedId={
             searchBeat.refPlan.slots.find((slot) => slot.kind === "searched")
               ?.assetId || ""

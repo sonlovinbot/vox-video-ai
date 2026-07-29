@@ -3,7 +3,13 @@ export type AspectRatio = "9:16" | "1:1" | "16:9";
 export type Duration = 30 | 60 | 180;
 export type RefRole = "subject" | "style" | "character" | "environment";
 export type ProjectStatus = "draft" | "in_progress" | "completed";
-export type GenerationStatus = "idle" | "generating" | "completed" | "failed";
+export type GenerationStatus =
+  | "idle"
+  | "queued"
+  | "generating"
+  | "completed"
+  | "failed"
+  | "canceled";
 
 export interface ReferenceAsset {
   id: string;
@@ -223,6 +229,8 @@ export interface AppSettings {
   voiceIdVi: string;
   voiceIdEn: string;
   imageSearchEnabled: boolean;
+  searchPexels: boolean;
+  searchSerper: boolean;
   imageSearchCount: number;
   replicateModel: string;
   video: VideoSettings;

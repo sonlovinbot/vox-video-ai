@@ -144,29 +144,91 @@ async function searchSerper(query: string, count: number) {
   return normalizeSerper(await checkedJson(result, "Serper"));
 }
 
+async function translateSearchQuery(query: string) {
+  const apiKey = requireEnv("DEEPSEEK_API_KEY");
+  const baseUrl = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
+  const result = await fetchWithRetry(
+    `${baseUrl.replace(/\/$/, "")}/chat/completions`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: process.env.DEEPSEEK_MODEL || "deepseek-chat",
+        temperature: 0,
+        messages: [
+          {
+            role: "system",
+            content:
+              "Convert the user's image-search phrase to concise natural English. Preserve proper nouns. Return only the English query, without quotes or explanation.",
+          },
+          { role: "user", content: query },
+        ],
+      }),
+    },
+  );
+  const body = await checkedJson(result, "DeepSeek");
+  const translated = String(body?.choices?.[0]?.message?.content || "")
+    .replace(/^["']|["']$/g, "")
+    .trim();
+  if (!translated) throw new HttpError(502, "DeepSeek không dịch được từ khoá tìm ảnh.");
+  return translated;
+}
+
 app.post("/api/images/search", async (request, response, next) => {
   try {
     const query = String(request.body?.query || "").trim();
     const aspectRatio = String(request.body?.aspectRatio || "9:16");
     const count = Math.min(Math.max(Number(request.body?.count) || 6, 1), 12);
+    const requestedSources = Array.isArray(request.body?.sources)
+      ? request.body.sources.filter(
+          (source: unknown) => source === "pexels" || source === "serper",
+        )
+      : ["pexels", "serper"];
     if (!query) throw new HttpError(400, "Từ khoá tìm ảnh không được để trống.");
-    if (!process.env.PEXELS_API_KEY && !process.env.SERPER_API_KEY) {
-      throw new HttpError(503, "Chưa cấu hình PEXELS_API_KEY hoặc SERPER_API_KEY.");
+    if (!requestedSources.length) {
+      throw new HttpError(400, "Hãy bật ít nhất một nguồn ảnh.");
+    }
+    const configuredSources = requestedSources.filter((source: string) =>
+      source === "pexels"
+        ? Boolean(process.env.PEXELS_API_KEY)
+        : Boolean(process.env.SERPER_API_KEY),
+    );
+    if (!configuredSources.length) {
+      throw new HttpError(503, "Nguồn ảnh đã chọn chưa được cấu hình API key.");
     }
 
-    // Pexels luôn được thử trước; Serper chỉ chạy khi Pexels không ra kết quả.
-    let images: Awaited<ReturnType<typeof searchPexels>> = [];
-    let provider = "pexels";
-    try {
-      images = await searchPexels(query, count, aspectRatio);
-    } catch {
-      images = [];
-    }
-    if (!images.length) {
-      images = await searchSerper(query, count);
-      provider = "serper";
-    }
-    response.json({ images: images.slice(0, count), provider });
+    // Mọi provider đều nhận cùng một query tiếng Anh, kể cả khi người dùng nhập
+    // tiếng Việt hoặc ngôn ngữ khác.
+    const englishQuery = await translateSearchQuery(query);
+    const batches = await Promise.all(
+      configuredSources.map(async (source: string) => {
+        try {
+          return source === "pexels"
+            ? await searchPexels(englishQuery, count, aspectRatio)
+            : await searchSerper(englishQuery, count);
+        } catch {
+          return [];
+        }
+      }),
+    );
+    const seen = new Set<string>();
+    const images = batches
+      .flat()
+      .filter((image) => {
+        const key = image.fullUrl || image.thumbUrl;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, count);
+    response.json({
+      images,
+      providers: configuredSources,
+      query: englishQuery,
+    });
   } catch (error) {
     next(error);
   }

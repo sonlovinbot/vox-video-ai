@@ -16,6 +16,8 @@ export const defaultSettings: AppSettings = {
   voiceIdVi: "JxmKvRaNYFidf0N27Vng",
   voiceIdEn: "",
   imageSearchEnabled: false,
+  searchPexels: true,
+  searchSerper: true,
   imageSearchCount: 6,
   replicateModel: "wan-video/wan-2.2-i2v-fast",
   video: VIDEO_PRESETS.draft,

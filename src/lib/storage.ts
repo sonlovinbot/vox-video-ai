@@ -48,6 +48,8 @@ function normalizeVideo(video: Partial<BeatVideo> | undefined): BeatVideo {
 }
 
 function normalizeBeat(beat: Partial<Beat>, index: number): Beat {
+  const imageInFlight =
+    beat.generationStatus === "generating" || beat.generationStatus === "queued";
   return {
     id: beat.id || crypto.randomUUID(),
     index: beat.index || index + 1,
@@ -62,9 +64,9 @@ function normalizeBeat(beat: Partial<Beat>, index: number): Beat {
     motionPrompt: beat.motionPrompt || "",
     outputImage: beat.outputImage || "",
     outputName: beat.outputName || "",
-    generationStatus:
-      beat.generationStatus ||
-      (beat.outputImage ? "completed" : "idle"),
+    generationStatus: imageInFlight
+      ? "idle"
+      : beat.generationStatus || (beat.outputImage ? "completed" : "idle"),
     generationError: beat.generationError || "",
     imageProvider: beat.imageProvider || "",
     refPlan: normalizeRefPlan(beat.refPlan),
@@ -142,6 +144,11 @@ function serializeProject(project: ProjectState): ProjectState {
         beat.outputImage.startsWith("/generated/")
           ? beat.outputImage
           : "",
+      generationStatus:
+        beat.generationStatus === "generating" ||
+        beat.generationStatus === "queued"
+          ? "idle"
+          : beat.generationStatus,
     })),
     references: project.references.map((asset) => ({
       ...asset,

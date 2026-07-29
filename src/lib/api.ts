@@ -103,14 +103,19 @@ export function searchImages(
   query: string,
   aspectRatio: string,
   count: number,
+  sources: Array<"pexels" | "serper"> = ["pexels", "serper"],
   signal?: AbortSignal,
 ) {
-  return apiFetch<{ images: SearchedImage[]; provider: string }>(
+  return apiFetch<{
+    images: SearchedImage[];
+    providers: string[];
+    query: string;
+  }>(
     "/api/images/search",
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, aspectRatio, count }),
+      body: JSON.stringify({ query, aspectRatio, count, sources }),
       signal,
     },
   );

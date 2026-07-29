@@ -944,7 +944,7 @@ function SetupStep({
       const { cachedUrl } = await cacheImage(image.fullUrl);
       const asset: ReferenceAsset = {
         id: crypto.randomUUID(),
-        name: image.attribution || "Ảnh Pexels",
+        name: image.attribution || `Ảnh ${image.source}`,
         type: "image/jpeg",
         size: 0,
         previewUrl: cachedUrl,
@@ -959,7 +959,7 @@ function SetupStep({
             : current.references,
       }));
       setPickedRefImageIds((current) => [...current, image.id]);
-      notify("Đã thêm ảnh Pexels làm reference bối cảnh.", "success");
+      notify(`Đã thêm ảnh ${image.source} làm reference bối cảnh.`, "success");
     } catch (error) {
       notify(error instanceof Error ? error.message : "Không thêm được ảnh.", "error");
     }
@@ -997,6 +997,26 @@ function SetupStep({
       storyboardGenerated: false,
     }));
     notify(`Đã thêm ${assets.length} ảnh reference.`, "success");
+  };
+
+  const pasteReferences = async () => {
+    try {
+      const items = await navigator.clipboard.read();
+      const files: File[] = [];
+      for (const item of items) {
+        const type = item.types.find((value) => value.startsWith("image/"));
+        if (!type) continue;
+        const blob = await item.getType(type);
+        files.push(new File([blob], "clipboard.png", { type }));
+      }
+      if (!files.length) {
+        notify("Clipboard không có ảnh.", "error");
+        return;
+      }
+      await processFiles(files);
+    } catch {
+      notify("Không đọc được clipboard. Hãy bấm vào vùng ảnh rồi Ctrl/Cmd+V.", "error");
+    }
   };
 
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
@@ -1210,6 +1230,12 @@ function SetupStep({
                 <MagnifyingGlass size={16} />
                 Gợi ý ảnh từ Pexels
               </button>
+              <button
+                className="button button-quiet button-small"
+                onClick={() => void pasteReferences()}
+              >
+                Dán ảnh
+              </button>
               <span className="field-help">
                 Nạp với vai trò bối cảnh: model chỉ lấy bố cục rồi vẽ lại thành giấy cắt.
               </span>
@@ -1233,6 +1259,15 @@ function SetupStep({
               }}
               onDragLeave={() => setIsDragging(false)}
               onDrop={onDrop}
+              onPaste={(event) => {
+                const files = Array.from(event.clipboardData.files).filter((file) =>
+                  file.type.startsWith("image/"),
+                );
+                if (files.length) {
+                  event.preventDefault();
+                  void processFiles(files);
+                }
+              }}
               onClick={() => fileInput.current?.click()}
               role="button"
               tabIndex={0}
@@ -1385,6 +1420,10 @@ function SetupStep({
           initialQuery={hasRealTitle ? project.config.title : ""}
           aspectRatio={project.config.aspectRatio}
           count={settings.imageSearchCount}
+          enabledSources={[
+            ...(settings.searchPexels ? (["pexels"] as const) : []),
+            ...(settings.searchSerper ? (["serper"] as const) : []),
+          ]}
           selectedIds={pickedRefImageIds}
           applicationNote="Mỗi ảnh được thêm vào project với vai trò Bối cảnh và content lock. Trước khi viết script, AI sẽ đọc nội dung ảnh, trích keyword chính xác và dùng chúng để lập ref plan cho từng beat."
           onPick={addSuggestedRef}
@@ -1661,6 +1700,7 @@ function StoryboardStep({
   const [isBatchVideo, setIsBatchVideo] = useState(false);
   const [imageFilter, setImageFilter] = useState<"all" | "failed">("all");
   const [mediaTabs, setMediaTabs] = useState<Record<string, MediaTab>>({});
+  const imageAbort = useRef<AbortController | null>(null);
   // Một controller cho cả lượt: bấm Dừng là abort hết, server nhận được và gọi
   // cancel lên Replicate cho từng prediction đang chạy.
   const videoAbort = useRef<AbortController | null>(null);
@@ -1673,6 +1713,12 @@ function StoryboardStep({
   ).length;
   const newImageCount = project.beats.filter(
     (beat) => !beat.outputImage && beat.generationStatus !== "failed",
+  ).length;
+  const canceledImageCount = project.beats.filter(
+    (beat) => beat.generationStatus === "canceled",
+  ).length;
+  const canceledVideoCount = project.beats.filter(
+    (beat) => beat.video.status === "canceled",
   ).length;
   const visibleBeats =
     imageFilter === "failed" && failedImageCount > 0
@@ -1710,7 +1756,30 @@ function StoryboardStep({
     notify("Đã gắn keyframe vào storyboard.", "success");
   };
 
-  const createKeyframe = async (beat: Beat, quiet = false) => {
+  const pasteOutput = async (beatId: string) => {
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = item.types.find((value) => value.startsWith("image/"));
+        if (!type) continue;
+        const blob = await item.getType(type);
+        await uploadOutput(
+          beatId,
+          new File([blob], "clipboard-keyframe.png", { type }),
+        );
+        return;
+      }
+      notify("Clipboard không có ảnh.", "error");
+    } catch {
+      notify("Không đọc được clipboard. Hãy bấm vào card rồi Ctrl/Cmd+V.", "error");
+    }
+  };
+
+  const createKeyframe = async (
+    beat: Beat,
+    signal?: AbortSignal,
+    quiet = false,
+  ) => {
     setGeneratingBeatIds((current) => [...current, beat.id]);
     setProject((current) => ({
       ...current,
@@ -1733,6 +1802,7 @@ function StoryboardStep({
         project.references,
         project.searchedImages,
         settings,
+        signal,
       );
       setProject((current) => ({
         ...current,
@@ -1759,6 +1829,8 @@ function StoryboardStep({
       }
       return true;
     } catch (error) {
+      const aborted =
+        signal?.aborted || (error instanceof Error && error.name === "AbortError");
       const message =
         error instanceof Error ? error.message : "Không tạo được keyframe.";
       setProject((current) => ({
@@ -1767,13 +1839,13 @@ function StoryboardStep({
           item.id === beat.id
             ? {
                 ...item,
-                generationStatus: "failed",
-                generationError: message,
+                generationStatus: aborted ? "canceled" : "failed",
+                generationError: aborted ? "" : message,
               }
             : item,
         ),
       }));
-      if (!quiet) notify(message, "error");
+      if (!quiet && !aborted) notify(message, "error");
       return false;
     } finally {
       setGeneratingBeatIds((current) =>
@@ -1887,6 +1959,11 @@ function StoryboardStep({
     notify("Đang huỷ các video đang dựng...", "neutral");
   };
 
+  const stopImageBatch = () => {
+    imageAbort.current?.abort();
+    notify("Đang dừng batch ảnh...", "neutral");
+  };
+
   const createBatch = async (mode: "new" | "failed") => {
     const candidates = project.beats
       .filter((beat) =>
@@ -1905,20 +1982,48 @@ function StoryboardStep({
       return;
     }
     setIsBatchGenerating(true);
-    const results = await Promise.all(
-      candidates.map((beat) => createKeyframe(beat, true)),
-    );
-    const completed = results.filter(Boolean).length;
-    const failed = results.length - completed;
-    notify(
-      failed
-        ? `Batch hoàn tất: ${completed} ảnh thành công, ${failed} ảnh lỗi.`
-        : mode === "failed"
-          ? `Đã khôi phục ${completed} keyframe lỗi.`
-          : `Đã tạo xong ${completed} keyframe trong batch.`,
-      failed ? "error" : "success",
-    );
+    const controller = new AbortController();
+    imageAbort.current = controller;
+    setProject((current) => ({
+      ...current,
+      beats: current.beats.map((beat) =>
+        candidates.some((candidate) => candidate.id === beat.id)
+          ? { ...beat, generationStatus: "queued", generationError: "" }
+          : beat,
+      ),
+    }));
+    let completed = 0;
+    let failed = 0;
+    await runWithLimit(candidates, 5, async (beat) => {
+      if (controller.signal.aborted) {
+        setProject((current) => ({
+          ...current,
+          beats: current.beats.map((item) =>
+            item.id === beat.id
+              ? { ...item, generationStatus: "canceled" }
+              : item,
+          ),
+        }));
+        return;
+      }
+      const ok = await createKeyframe(beat, controller.signal, true);
+      if (ok) completed += 1;
+      else if (!controller.signal.aborted) failed += 1;
+    });
+    imageAbort.current = null;
     setIsBatchGenerating(false);
+    if (controller.signal.aborted) {
+      notify(`Đã dừng. ${completed} ảnh hoàn tất trước khi dừng.`, "neutral");
+    } else {
+      notify(
+        failed
+          ? `Batch hoàn tất: ${completed} ảnh thành công, ${failed} ảnh lỗi.`
+          : mode === "failed"
+            ? `Đã khôi phục ${completed} keyframe lỗi.`
+            : `Đã tạo xong ${completed} keyframe trong batch.`,
+        failed ? "error" : "success",
+      );
+    }
   };
 
   return (
@@ -1943,7 +2048,7 @@ function StoryboardStep({
                 onClick={() => setIsVideoBatchOpen(true)}
               >
                 <FilmStrip size={18} />
-                Dựng video hàng loạt
+                {canceledVideoCount ? "Tiếp tục dựng video" : "Dựng video hàng loạt"}
               </button>
             )}
             <button
@@ -2017,6 +2122,13 @@ function StoryboardStep({
               <span>Chỉ tạo ảnh khi bạn bấm nút. Mỗi batch tối đa 5 beat.</span>
             </div>
             <div className="batch-actions">
+              {isBatchGenerating ? (
+                <button className="button button-danger" onClick={stopImageBatch}>
+                  <Stop size={18} weight="fill" />
+                  Dừng tạo ảnh
+                </button>
+              ) : (
+                <>
               {failedImageCount > 0 && (
                 <>
                   <button
@@ -2032,13 +2144,8 @@ function StoryboardStep({
                   <button
                     className="button button-danger"
                     onClick={() => void createBatch("failed")}
-                    disabled={isBatchGenerating}
                   >
-                    {isBatchGenerating ? (
-                      <span className="button-loader" />
-                    ) : (
-                      <ArrowsClockwise size={18} />
-                    )}
+                    <ArrowsClockwise size={18} />
                     Thử lại {Math.min(5, failedImageCount)} ảnh lỗi
                   </button>
                 </>
@@ -2047,22 +2154,34 @@ function StoryboardStep({
                 <button
                   className="button button-primary"
                   onClick={() => void createBatch("new")}
-                  disabled={isBatchGenerating}
                 >
-                  {isBatchGenerating ? (
-                    <span className="button-loader" />
-                  ) : (
-                    <Stack size={18} weight="fill" />
-                  )}
-                  Tạo {Math.min(5, newImageCount)} ảnh tiếp theo
+                  <Stack size={18} weight="fill" />
+                  {canceledImageCount
+                    ? `Tiếp tục ${Math.min(5, newImageCount)} ảnh`
+                    : `Tạo ${Math.min(5, newImageCount)} ảnh tiếp theo`}
                 </button>
+              )}
+                </>
               )}
             </div>
           </div>
 
           <div className={`storyboard-grid ${ratioClass}`}>
             {visibleBeats.map((beat) => (
-              <article className="story-card" key={beat.id}>
+              <article
+                className="story-card"
+                key={beat.id}
+                tabIndex={0}
+                onPaste={(event) => {
+                  const file = Array.from(event.clipboardData.files).find((item) =>
+                    item.type.startsWith("image/"),
+                  );
+                  if (file) {
+                    event.preventDefault();
+                    void uploadOutput(beat.id, file);
+                  }
+                }}
+              >
                 <BeatMediaTabs
                   beat={beat}
                   aspectRatio={project.config.aspectRatio}
@@ -2097,6 +2216,10 @@ function StoryboardStep({
                           ? "Bị lỗi"
                           : beat.generationStatus === "generating"
                             ? "Đang tạo"
+                            : beat.generationStatus === "queued"
+                              ? "Đang chờ"
+                              : beat.generationStatus === "canceled"
+                                ? "Đã dừng"
                             : "Chưa tạo"}
                     </span>
                   </div>
@@ -2137,6 +2260,12 @@ function StoryboardStep({
                       }}
                     />
                   </label>
+                  <button
+                    className="button button-quiet button-small"
+                    onClick={() => void pasteOutput(beat.id)}
+                  >
+                    Dán ảnh
+                  </button>
                 </div>
               </article>
             ))}
@@ -3139,10 +3268,22 @@ function SettingsDialog({
               checked={settings.imageSearchEnabled}
               onChange={(value) => update("imageSearchEnabled", value)}
             />
+            <div className="form-grid two-cols">
+              <ToggleRow
+                label="Dùng Pexels"
+                checked={settings.searchPexels}
+                onChange={(value) => update("searchPexels", value)}
+              />
+              <ToggleRow
+                label="Dùng Serper / Google Images"
+                checked={settings.searchSerper}
+                onChange={(value) => update("searchSerper", value)}
+              />
+            </div>
             <p className="field-help">
-              Pexels luôn được thử trước; chỉ khi Pexels không có kết quả mới rơi
-              sang Serper. Ảnh Serper là ảnh web chưa rõ bản quyền, chỉ nên dùng
-              làm tham chiếu bố cục vì model sẽ vẽ lại thành giấy cắt.
+              Hai nguồn chạy độc lập theo lựa chọn. Hệ thống dịch mọi keyword
+              sang tiếng Anh trước khi tìm. Ảnh Serper là ảnh web chưa rõ bản
+              quyền, chỉ nên dùng làm tham chiếu bố cục.
               {status && (
                 <>
                   {" "}
