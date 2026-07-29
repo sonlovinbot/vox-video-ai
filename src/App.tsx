@@ -76,7 +76,6 @@ import { CastingStep } from "./components/CastingStep";
 import { ExportPackDialog } from "./components/ExportPackDialog";
 import { BeatMediaTabs, type MediaTab } from "./components/BeatMediaTabs";
 import { VideoBatchDialog } from "./components/VideoBatchDialog";
-import { NewProjectDialog } from "./components/NewProjectDialog";
 import { PreviewPlayer } from "./components/PreviewPlayer";
 import { TopicPickerDialog } from "./components/TopicPickerDialog";
 import { COVER_LABELS } from "./lib/topics";
@@ -93,6 +92,7 @@ import { runWithLimit } from "./lib/concurrency";
 import { beatsNeedingVideo, framesForBeat, resolveVideoSettings } from "./lib/video";
 import { emptyRefPlan, parseRefPlanFromAI } from "./lib/casting";
 import { emptyBeatVideo } from "./lib/video";
+import { projectIdFromUrl, projectUrl } from "./lib/projectUrl";
 import {
   deleteProjectById,
   listProjects,
@@ -180,6 +180,11 @@ const roleLabels: Record<RefRole, string> = {
 
 function App() {
   const [project, setProject] = useState<ProjectState>(() => {
+    const urlProjectId = projectIdFromUrl(window.location.href);
+    if (urlProjectId) {
+      const linkedProject = loadProjectById(urlProjectId);
+      if (linkedProject) return linkedProject;
+    }
     const saved = loadProject();
     return saved ?? emptyProject();
   });
@@ -191,7 +196,7 @@ function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
+  const [isNewProjectTopicOpen, setIsNewProjectTopicOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
 
   useEffect(() => {
@@ -201,6 +206,24 @@ function App() {
   useEffect(() => {
     saveProject({ ...project, updatedAt: new Date().toISOString() });
   }, [project]);
+
+  useEffect(() => {
+    const nextUrl = projectUrl(project.id);
+    if (`${window.location.pathname}${window.location.search}` !== nextUrl) {
+      window.history.replaceState({ projectId: project.id }, "", nextUrl);
+    }
+  }, [project.id]);
+
+  useEffect(() => {
+    const openLinkedProject = () => {
+      const projectId = projectIdFromUrl(window.location.href);
+      if (!projectId) return;
+      const linkedProject = loadProjectById(projectId);
+      if (linkedProject) setProject(linkedProject);
+    };
+    window.addEventListener("popstate", openLinkedProject);
+    return () => window.removeEventListener("popstate", openLinkedProject);
+  }, []);
 
   useEffect(() => {
     saveSettings(settings);
@@ -352,18 +375,26 @@ function App() {
     }, 700);
   };
 
-  const resetProject = (title: string, videoQuality: ProjectConfig["videoQuality"]) => {
+  const createProjectFromTopic = (title: string) => {
     const fresh = emptyProject();
-    setProject({
+    const nextProject = {
       ...fresh,
       config: {
         ...fresh.config,
-        title: title.trim() || fresh.config.title,
-        videoQuality,
+        title: title.trim(),
+        coverTitle: title.trim(),
+        videoQuality: settings.video.quality,
       },
-    });
-    setIsNewProjectOpen(false);
-    notify("Đã tạo dự án mới. Dự án cũ vẫn nằm trong lịch sử.", "success");
+    };
+    window.history.pushState(
+      { projectId: nextProject.id },
+      "",
+      projectUrl(nextProject.id),
+    );
+    setProject(nextProject);
+    setIsNewProjectTopicOpen(false);
+    setIsSidebarOpen(false);
+    notify("Đã tạo video mới từ chủ đề đã chọn.", "success");
   };
 
   const loadSample = () => {
@@ -436,6 +467,11 @@ function App() {
       const raw = await file.text();
       const parsed = JSON.parse(raw);
       const imported = normalizeProject(parsed.project || parsed);
+      window.history.pushState(
+        { projectId: imported.id },
+        "",
+        projectUrl(imported.id),
+      );
       setProject(imported);
       setIsSidebarOpen(false);
       notify("Đã nhập dự án và khôi phục tiến độ.", "success");
@@ -450,6 +486,11 @@ function App() {
       notify("Không tìm thấy dự án đã lưu.", "error");
       return;
     }
+    window.history.pushState(
+      { projectId: selected.id },
+      "",
+      projectUrl(selected.id),
+    );
     setProject(selected);
     setIsHistoryOpen(false);
     setIsSidebarOpen(false);
@@ -465,7 +506,7 @@ function App() {
         onClose={() => setIsSidebarOpen(false)}
         onNavigate={changeStep}
         onLoadSample={loadSample}
-        onReset={() => setIsNewProjectOpen(true)}
+        onReset={() => setIsNewProjectTopicOpen(true)}
         onSettings={() => setIsSettingsOpen(true)}
         onHistory={() => setIsHistoryOpen(true)}
         onImport={importProjectFile}
@@ -535,11 +576,10 @@ function App() {
         </div>
       </main>
 
-      {isNewProjectOpen && (
-        <NewProjectDialog
-          defaultQuality={settings.video.quality}
-          onCreate={resetProject}
-          onClose={() => setIsNewProjectOpen(false)}
+      {isNewProjectTopicOpen && (
+        <TopicPickerDialog
+          onPick={(title) => createProjectFromTopic(title)}
+          onClose={() => setIsNewProjectTopicOpen(false)}
         />
       )}
 
@@ -814,6 +854,21 @@ function SetupStep({
 
   const [isDragging, setIsDragging] = useState(false);
 
+  const updateVideoTitle = (title: string) => {
+    setProject((current) => ({
+      ...current,
+      config: {
+        ...current.config,
+        title,
+        // Cover title is derived from the video title; there is no second field.
+        coverTitle: title,
+      },
+      scriptApproved: false,
+      castingApproved: false,
+      storyboardGenerated: false,
+    }));
+  };
+
   /** Tiêu đề chưa đặt thì mọi gợi ý đều vô nghĩa — AI không biết viết về gì. */
   const hasRealTitle =
     Boolean(project.config.title.trim()) &&
@@ -977,11 +1032,11 @@ function SetupStep({
             description="Những trường này đi xuyên suốt toàn bộ prompt chain."
           >
             <div className="form-grid two-cols">
-              <Field label="Tên dự án">
+              <Field label="Tiêu đề video">
                 <div className="field-with-action">
                   <input
                     value={project.config.title}
-                    onChange={(event) => updateConfig("title", event.target.value)}
+                    onChange={(event) => updateVideoTitle(event.target.value)}
                     placeholder="Ví dụ: VinFast tại Đông Nam Á"
                   />
                   <button
@@ -1006,15 +1061,6 @@ function SetupStep({
                     </option>
                   ))}
                 </select>
-              </Field>
-              <Field label="Tiêu đề cover (để trống thì dùng tên dự án)">
-                <input
-                  value={project.config.coverTitle}
-                  onChange={(event) =>
-                    updateConfig("coverTitle", event.target.value)
-                  }
-                  placeholder="Hành trình đơn hàng 39K"
-                />
               </Field>
               <Field label="Ngôn ngữ">
                 <select
@@ -1311,7 +1357,7 @@ function SetupStep({
         <TopicPickerDialog
           onClose={() => setIsTopicOpen(false)}
           onPick={(title) => {
-            updateConfig("title", title);
+            updateVideoTitle(title);
             setIsTopicOpen(false);
             notify("Đã chọn chủ đề. Bấm AI gợi ý để điền định hướng.", "success");
           }}
