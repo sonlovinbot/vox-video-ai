@@ -182,8 +182,6 @@ export interface ProjectState {
   scriptApproved: boolean;
   castingApproved: boolean;
   storyboardGenerated: boolean;
-  /** Chặn auto batch chạy lại khi reload hoặc mở lại storyboard. */
-  autoKeyframeBatchStarted: boolean;
   searchedImages: SearchedImage[];
   timeline: VoiceTimeline;
   lastRender: RenderOutput | null;

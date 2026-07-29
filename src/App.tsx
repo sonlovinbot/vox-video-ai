@@ -1,6 +1,7 @@
 import {
   ArrowLeft,
   ArrowRight,
+  ArrowsClockwise,
   Check,
   CheckCircle,
   ClockCounterClockwise,
@@ -385,7 +386,6 @@ function App() {
         scriptApproved: true,
         castingApproved: true,
         storyboardGenerated: true,
-        autoKeyframeBatchStarted: false,
       }));
       setIsGenerating(false);
       notify("Storyboard và bộ prompt đã sẵn sàng.", "success");
@@ -1659,6 +1659,7 @@ function StoryboardStep({
   const [isExportPackOpen, setIsExportPackOpen] = useState(false);
   const [isVideoBatchOpen, setIsVideoBatchOpen] = useState(false);
   const [isBatchVideo, setIsBatchVideo] = useState(false);
+  const [imageFilter, setImageFilter] = useState<"all" | "failed">("all");
   const [mediaTabs, setMediaTabs] = useState<Record<string, MediaTab>>({});
   // Một controller cho cả lượt: bấm Dừng là abort hết, server nhận được và gọi
   // cancel lên Replicate cho từng prediction đang chạy.
@@ -1667,9 +1668,16 @@ function StoryboardStep({
     () => buildStylePrompt(project.config, project.references),
     [project.config, project.references],
   );
-  const pendingCount = project.beats.filter(
-    (beat) => !beat.outputImage || beat.generationStatus === "failed",
+  const failedImageCount = project.beats.filter(
+    (beat) => beat.generationStatus === "failed",
   ).length;
+  const newImageCount = project.beats.filter(
+    (beat) => !beat.outputImage && beat.generationStatus !== "failed",
+  ).length;
+  const visibleBeats =
+    imageFilter === "failed" && failedImageCount > 0
+      ? project.beats.filter((beat) => beat.generationStatus === "failed")
+      : project.beats;
   const ratioClass = `storyboard-ratio-${project.config.aspectRatio.replace(":", "-")}`;
 
   const copyText = async (text: string, label: string) => {
@@ -1879,12 +1887,21 @@ function StoryboardStep({
     notify("Đang huỷ các video đang dựng...", "neutral");
   };
 
-  const createBatch = async () => {
+  const createBatch = async (mode: "new" | "failed") => {
     const candidates = project.beats
-      .filter((beat) => !beat.outputImage || beat.generationStatus === "failed")
+      .filter((beat) =>
+        mode === "failed"
+          ? beat.generationStatus === "failed"
+          : !beat.outputImage && beat.generationStatus !== "failed",
+      )
       .slice(0, 5);
     if (!candidates.length) {
-      notify("Tất cả keyframe đã có ảnh.", "neutral");
+      notify(
+        mode === "failed"
+          ? "Không có keyframe lỗi cần thử lại."
+          : "Không còn keyframe mới cần tạo.",
+        "neutral",
+      );
       return;
     }
     setIsBatchGenerating(true);
@@ -1895,30 +1912,14 @@ function StoryboardStep({
     const failed = results.length - completed;
     notify(
       failed
-        ? `Batch hoàn tất: ${completed} ảnh thành công, ${failed} ảnh cần thử lại.`
-        : `Đã tạo xong ${completed} keyframe trong batch.`,
+        ? `Batch hoàn tất: ${completed} ảnh thành công, ${failed} ảnh lỗi.`
+        : mode === "failed"
+          ? `Đã khôi phục ${completed} keyframe lỗi.`
+          : `Đã tạo xong ${completed} keyframe trong batch.`,
       failed ? "error" : "success",
     );
     setIsBatchGenerating(false);
   };
-
-  useEffect(() => {
-    if (
-      !project.storyboardGenerated ||
-      project.autoKeyframeBatchStarted ||
-      pendingCount === 0
-    ) {
-      return;
-    }
-    setProject((current) => ({
-      ...current,
-      autoKeyframeBatchStarted: true,
-    }));
-    notify("Preview đã sẵn sàng. Đang tự tạo batch keyframe đầu tiên.", "neutral");
-    void createBatch();
-    // createBatch phải chạy đúng một lần sau khi storyboard mới được hydrate.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.storyboardGenerated, project.autoKeyframeBatchStarted, project.id]);
 
   return (
     <section className="step-page">
@@ -2009,30 +2010,58 @@ function StoryboardStep({
 
           <div className="batch-toolbar">
             <div>
-              <strong>{pendingCount} keyframe chưa hoàn tất</strong>
-              <span>Mỗi lần chạy tối đa 5 beat. Beat lỗi có thể thử lại riêng.</span>
+              <strong>
+                {newImageCount} ảnh chưa tạo
+                {failedImageCount ? `, ${failedImageCount} ảnh lỗi` : ""}
+              </strong>
+              <span>Chỉ tạo ảnh khi bạn bấm nút. Mỗi batch tối đa 5 beat.</span>
             </div>
-            <button
-              className="button button-primary"
-              onClick={() => void createBatch()}
-              disabled={isBatchGenerating || pendingCount === 0}
-            >
-              {isBatchGenerating ? (
+            <div className="batch-actions">
+              {failedImageCount > 0 && (
                 <>
-                  <span className="button-loader" />
-                  Đang chạy batch
-                </>
-              ) : (
-                <>
-                  <Stack size={18} weight="fill" />
-                  Tạo {Math.min(5, pendingCount)} ảnh tiếp theo
+                  <button
+                    className="button button-quiet"
+                    onClick={() =>
+                      setImageFilter((current) =>
+                        current === "failed" ? "all" : "failed",
+                      )
+                    }
+                  >
+                    {imageFilter === "failed" ? "Hiện tất cả" : "Chỉ xem ảnh lỗi"}
+                  </button>
+                  <button
+                    className="button button-danger"
+                    onClick={() => void createBatch("failed")}
+                    disabled={isBatchGenerating}
+                  >
+                    {isBatchGenerating ? (
+                      <span className="button-loader" />
+                    ) : (
+                      <ArrowsClockwise size={18} />
+                    )}
+                    Thử lại {Math.min(5, failedImageCount)} ảnh lỗi
+                  </button>
                 </>
               )}
-            </button>
+              {newImageCount > 0 && (
+                <button
+                  className="button button-primary"
+                  onClick={() => void createBatch("new")}
+                  disabled={isBatchGenerating}
+                >
+                  {isBatchGenerating ? (
+                    <span className="button-loader" />
+                  ) : (
+                    <Stack size={18} weight="fill" />
+                  )}
+                  Tạo {Math.min(5, newImageCount)} ảnh tiếp theo
+                </button>
+              )}
+            </div>
           </div>
 
           <div className={`storyboard-grid ${ratioClass}`}>
-            {project.beats.map((beat) => (
+            {visibleBeats.map((beat) => (
               <article className="story-card" key={beat.id}>
                 <BeatMediaTabs
                   beat={beat}
