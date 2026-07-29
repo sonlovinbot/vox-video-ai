@@ -115,6 +115,7 @@ export const emptyProject = () => ({
   scriptApproved: false,
   castingApproved: false,
   storyboardGenerated: false,
+  autoKeyframeBatchStarted: false,
   searchedImages: [],
   timeline: emptyTimeline(),
   lastRender: null,

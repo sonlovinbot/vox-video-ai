@@ -26,6 +26,12 @@ export interface ImageGenerationResult {
   taskId?: string;
 }
 
+export interface ReferenceAnalysis {
+  id: string;
+  description: string;
+  keywords: string[];
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
   const body = await response.json().catch(() => ({}));
@@ -61,10 +67,36 @@ export function generateScriptWithAI(
         name: asset.name,
         role: asset.role,
         notes: asset.notes,
+        visualDescription: asset.visualDescription || "",
+        visualKeywords: asset.visualKeywords || [],
       })),
     }),
     signal,
   });
+}
+
+export async function analyzeReferences(
+  references: ReferenceAsset[],
+  signal?: AbortSignal,
+) {
+  const payload = await Promise.all(
+    references.slice(0, 6).map(async (asset) => ({
+      id: asset.id,
+      name: asset.name,
+      role: asset.role,
+      notes: asset.notes,
+      dataUrl: await previewToDataUrl(asset),
+    })),
+  );
+  return apiFetch<{ analyses: ReferenceAnalysis[]; model: string }>(
+    "/api/references/analyze",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ references: payload }),
+      signal,
+    },
+  );
 }
 
 export function searchImages(
@@ -261,6 +293,7 @@ export function renderVideo(
     start: number;
     end: number;
     job: string;
+    overlay: string;
     videoUrl: string;
     videoDuration: number;
   }>,

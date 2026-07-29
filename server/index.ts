@@ -271,6 +271,71 @@ Trả JSON: {"context":"...","objective":"...","audience":"...","callToAction":"
   }
 });
 
+app.post("/api/references/analyze", async (request, response, next) => {
+  try {
+    const references = Array.isArray(request.body?.references)
+      ? request.body.references.slice(0, 6)
+      : [];
+    if (!references.length) {
+      response.json({ analyses: [], model: "" });
+      return;
+    }
+
+    const model = process.env.GEMINI_VISION_MODEL || "gemini-2.5-flash";
+    const ai = new GoogleGenAI({ apiKey: requireEnv("GEMINI_API_KEY") });
+    const parts: any[] = [
+      {
+        text: `Phân tích các ảnh reference cho một video giải thích.
+
+Với từng ảnh, trả:
+- id: giữ nguyên ID được cung cấp.
+- description: một câu tiếng Việt mô tả chính xác chủ thể, hành động, bối cảnh, màu sắc và chi tiết nhận diện nhìn thấy được. Không đoán thương hiệu hoặc danh tính nếu ảnh không cho thấy rõ.
+- keywords: 3-8 cụm từ tiếng Anh cụ thể có thể dùng để tìm stock photo cùng chủ thể hoặc bối cảnh. Ưu tiên danh từ nhìn thấy thật trong ảnh, không dùng từ chỉ phong cách.
+
+Chỉ trả JSON: {"analyses":[{"id":"","description":"","keywords":[""]}]}.`,
+      },
+    ];
+
+    for (const reference of references) {
+      const id = String(reference?.id || "");
+      const name = String(reference?.name || "reference");
+      const role = String(reference?.role || "subject");
+      const notes = String(reference?.notes || "");
+      const { mimeType, data } = dataUrlParts(String(reference?.dataUrl || ""));
+      parts.push({
+        text: `REFERENCE id=${id} | file=${name} | role=${role} | user notes=${notes || "none"}`,
+      });
+      parts.push({ inlineData: { mimeType, data } });
+    }
+
+    const result = await ai.models.generateContent({
+      model,
+      contents: [{ role: "user", parts }],
+      config: { responseMimeType: "application/json" },
+    });
+    const content = result.candidates?.[0]?.content?.parts
+      ?.map((part) => part.text || "")
+      .join("")
+      .trim();
+    if (!content) throw new HttpError(502, "Gemini không trả phân tích ảnh.");
+    const parsed = JSON.parse(content.replace(/^```json\s*|\s*```$/g, ""));
+    const allowedIds = new Set(references.map((item: any) => String(item?.id || "")));
+    const analyses = (Array.isArray(parsed.analyses) ? parsed.analyses : [])
+      .map((item: any) => ({
+        id: String(item?.id || ""),
+        description: String(item?.description || "").trim(),
+        keywords: (Array.isArray(item?.keywords) ? item.keywords : [])
+          .map((keyword: unknown) => String(keyword || "").trim())
+          .filter(Boolean)
+          .slice(0, 8),
+      }))
+      .filter((item: any) => allowedIds.has(item.id) && item.description);
+    response.json({ analyses, model });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/script/generate", async (request, response, next) => {
   try {
     const apiKey = requireEnv("DEEPSEEK_API_KEY");
@@ -291,7 +356,12 @@ app.post("/api/script/generate", async (request, response, next) => {
             (asset: any, index: number) =>
               `${index + 1}. ${String(asset?.name || "reference")} | role=${String(
                 asset?.role || "subject",
-              )} | ${String(asset?.notes || "không có ghi chú")}`,
+              )} | notes=${String(asset?.notes || "không có ghi chú")} | AI sees=${String(
+                asset?.visualDescription || "chưa phân tích",
+              )} | exact keywords=${(Array.isArray(asset?.visualKeywords)
+                ? asset.visualKeywords
+                : []
+              ).join(", ") || "không có"}`,
           )
           .join("\n")
       : "Chưa có reference nào.";
@@ -336,6 +406,8 @@ Mỗi beat phải có refPlan gồm useUploads, searchQuery, newElements.
 - searchQuery là cụm từ TIẾNG ANH mô tả CẢNH VẬT hoặc VẬT THỂ cần tìm ảnh tham chiếu bố cục (ví dụ "warehouse conveyor belt parcels sorting"). Không mô tả style, không nhắc paper collage. Để rỗng nếu beat trừu tượng hoặc đã đủ reference.${
       searchEnabled ? "" : "\n- Tính năng tìm ảnh đang TẮT, luôn để searchQuery rỗng."
     }
+- Dựa vào phần "AI sees" để hiểu ảnh thật, không suy luận từ filename.
+- Khi searchQuery liên quan tới chủ thể đã nhìn thấy, tái sử dụng các "exact keywords" phù hợp và thêm bối cảnh của beat. Không thay bằng từ đồng nghĩa chung chung.
 - newElements liệt kê bằng TIẾNG VIỆT những element phải tự dựng mới vì không có reference nào.
 - Ràng buộc cứng: useUploads.length + (searchQuery khác rỗng ? 1 : 0) <= 4.
 
@@ -848,6 +920,9 @@ app.post("/api/render/video", async (request, response, next) => {
     const scaledChapters = plan.map((step, index) => ({
       index: step.beatIndex,
       label: String(beats.find((b: any) => b.index === step.beatIndex)?.job || ""),
+      overlay: String(
+        beats.find((b: any) => b.index === step.beatIndex)?.overlay || "",
+      ),
       start:
         plan.slice(0, index).reduce((t, s2) => t + s2.duration + s2.padSeconds, 0) / speed,
       end:

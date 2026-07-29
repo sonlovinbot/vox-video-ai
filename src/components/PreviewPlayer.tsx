@@ -72,6 +72,8 @@ export function PreviewPlayer({
   const phrase = timeline.phrases.find((p) => time >= p.start && time <= p.end + 0.2);
   const beatLabel =
     beats.find((beat) => beat.index === current?.beatIndex)?.job || "";
+  const editorOverlay =
+    beats.find((beat) => beat.index === current?.beatIndex)?.overlay || "";
 
   /**
    * Tốc độ chỉ đổi playbackRate của hai thẻ media.
@@ -182,6 +184,10 @@ export function PreviewPlayer({
             <span>{beatLabel}</span>
           </div>
         </div>
+
+        {editorOverlay.trim() && time >= cover.seconds && (
+          <div className="preview-editor-overlay">{editorOverlay}</div>
+        )}
 
         {phrase && (
           <div className="preview-caption">

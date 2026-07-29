@@ -131,7 +131,13 @@ export interface OverlayInput {
   /** Cover hiện bao nhiêu giây, ĐÃ chia tốc độ. */
   coverSeconds: number;
   /** Mỗi beat một chip chương, thời gian ĐÃ chia tốc độ. */
-  chapters: Array<{ index: number; label: string; start: number; end: number }>;
+  chapters: Array<{
+    index: number;
+    label: string;
+    overlay?: string;
+    start: number;
+    end: number;
+  }>;
 }
 
 /**
@@ -175,13 +181,27 @@ function buildOverlayEvents(
     );
 
     const label = escapeAssText(chapter.label).toUpperCase();
-    if (!label) return;
-    events.push(
-      `Dialogue: 2,${formatAssTime(chapter.start)},${formatAssTime(chapter.end)},Hud,,0,0,0,,` +
-        `{\\pos(${left},${barTop + Math.round(height * 0.028)})\\an7\\b1}` +
-        `{\\c&H0000D4FF&}${String(chapter.index).padStart(2, "0")}  ` +
-        `{\\c&H00FFFFFF&}${label}`,
-    );
+    if (label) {
+      events.push(
+        `Dialogue: 2,${formatAssTime(chapter.start)},${formatAssTime(chapter.end)},Hud,,0,0,0,,` +
+          `{\\pos(${left},${barTop + Math.round(height * 0.028)})\\an7\\b1}` +
+          `{\\c&H0000D4FF&}${String(chapter.index).padStart(2, "0")}  ` +
+          `{\\c&H00FFFFFF&}${label}`,
+      );
+    }
+
+    const editorOverlay = escapeAssText(chapter.overlay || "");
+    const overlayStart =
+      position === 0
+        ? Math.max(chapter.start, overlay.coverSeconds)
+        : chapter.start;
+    if (editorOverlay && overlayStart < chapter.end) {
+      events.push(
+        `Dialogue: 2,${formatAssTime(overlayStart)},${formatAssTime(chapter.end)},Overlay,,0,0,0,,` +
+          `{\\pos(${Math.round(width / 2)},${Math.round(height * 0.105)})\\an8}` +
+          editorOverlay,
+      );
+    }
   });
 
   const title = escapeAssText(overlay.coverTitle);
@@ -230,6 +250,7 @@ export function buildAssFile(
     `Style: Vox,${style.fontName},${style.fontSize},${style.highlight},${style.primary},${style.outline},&HB4141014,-1,0,0,0,100,100,0,0,3,10,0,2,90,90,${style.marginV},1`,
     // Hud và Cover không dùng karaoke nên PrimaryColour để trắng thẳng.
     `Style: Hud,${style.fontName},${Math.round(height * 0.021)},&H00FFFFFF,&H00FFFFFF,&H00201A14,&H00000000,-1,0,0,0,100,100,2,0,1,3,0,7,0,0,0,1`,
+    `Style: Overlay,${style.fontName},${Math.round(height * 0.028)},&H00FFFFFF,&H00FFFFFF,&H00201A14,&HB4141014,-1,0,0,0,100,100,0,0,3,7,0,8,90,90,0,1`,
     `Style: Cover,${style.fontName},${Math.round(height * 0.046)},&H00FFFFFF,&H00FFFFFF,&H00201A14,&H00000000,-1,0,0,0,100,100,0,0,1,5,0,7,0,0,0,1`,
     "",
     "[Events]",

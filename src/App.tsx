@@ -55,9 +55,9 @@ import {
 import {
   generateKeyframe,
   generateScriptWithAI,
+  analyzeReferences,
   generateVideo,
   suggestBrief,
-  searchImages,
   cacheImage,
   renderVideo,
   transcribeVoice,
@@ -78,6 +78,7 @@ import { BeatMediaTabs, type MediaTab } from "./components/BeatMediaTabs";
 import { VideoBatchDialog } from "./components/VideoBatchDialog";
 import { PreviewPlayer } from "./components/PreviewPlayer";
 import { TopicPickerDialog } from "./components/TopicPickerDialog";
+import { ImageSearchDialog } from "./components/ImageSearchDialog";
 import { COVER_LABELS } from "./lib/topics";
 import { alignWordsToScript } from "./lib/align";
 import { beatsWithRoleLabels } from "./lib/labels";
@@ -113,6 +114,7 @@ import type {
   ProjectSummary,
   ProviderStatus,
   RefRole,
+  SearchedImage,
   VideoQuality,
   VideoResolution,
   ReferenceAsset,
@@ -295,7 +297,23 @@ function App() {
     }
     try {
       const config = project.config;
-      const references = project.references;
+      let references = project.references;
+      if (references.length) {
+        notify("AI đang đọc ảnh reference và trích keyword...", "neutral");
+        const vision = await analyzeReferences(references);
+        const byId = new Map(vision.analyses.map((item) => [item.id, item]));
+        references = references.map((asset) => {
+          const analysis = byId.get(asset.id);
+          return analysis
+            ? {
+                ...asset,
+                visualDescription: analysis.description,
+                visualKeywords: analysis.keywords,
+              }
+            : asset;
+        });
+        setProject((current) => ({ ...current, references }));
+      }
       const result = await generateScriptWithAI(config, references, settings);
       const baseBeats = generateBeats(config, references);
       const beats = baseBeats.map((beat, index) => {
@@ -367,6 +385,7 @@ function App() {
         scriptApproved: true,
         castingApproved: true,
         storyboardGenerated: true,
+        autoKeyframeBatchStarted: false,
       }));
       setIsGenerating(false);
       notify("Storyboard và bộ prompt đã sẵn sàng.", "success");
@@ -839,10 +858,16 @@ function SetupStep({
 }: SetupStepProps) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [isTopicOpen, setIsTopicOpen] = useState(false);
+  const [isRefSearchOpen, setIsRefSearchOpen] = useState(false);
+  const [pickedRefImageIds, setPickedRefImageIds] = useState<string[]>([]);
   const [isSuggesting, setIsSuggesting] = useState(false);
-  const [isFindingRefs, setIsFindingRefs] = useState(false);
 
   const [isDragging, setIsDragging] = useState(false);
+
+  useEffect(() => {
+    setPickedRefImageIds([]);
+    setIsRefSearchOpen(false);
+  }, [project.id]);
 
   const updateVideoTitle = (title: string) => {
     setProject((current) => ({
@@ -906,44 +931,37 @@ function SetupStep({
    * Ảnh nạp vào với role environment và lock content: đây là ảnh chụp thật, chỉ
    * dùng làm tham chiếu bố cục, model sẽ vẽ lại thành giấy cắt.
    */
-  const suggestRefImages = async () => {
-    if (!hasRealTitle) {
-      setIsTopicOpen(true);
-      notify("Chọn một chủ đề trước, rồi mới tìm được ảnh liên quan.", "neutral");
+  const addSuggestedRef = async (image: SearchedImage) => {
+    if (project.references.length >= 6) {
+      notify("Đã đủ 6 ảnh reference.", "error");
       return;
     }
-    const query = project.config.title.trim();
-    setIsFindingRefs(true);
+    if (pickedRefImageIds.includes(image.id)) {
+      notify("Ảnh này đã được thêm.", "neutral");
+      return;
+    }
     try {
-      const { images } = await searchImages(query, project.config.aspectRatio, 4);
-      if (!images.length) throw new Error("Không tìm thấy ảnh phù hợp.");
-      const room = Math.max(0, 6 - project.references.length);
-      const picked = images.slice(0, room);
-      if (!picked.length) throw new Error("Đã đủ 6 ảnh reference.");
-
-      const assets = await Promise.all(
-        picked.map(async (image) => {
-          const { cachedUrl } = await cacheImage(image.fullUrl);
-          return {
-            id: crypto.randomUUID(),
-            name: image.attribution || "Ảnh Pexels",
-            type: "image/jpeg",
-            size: 0,
-            previewUrl: cachedUrl,
-            role: "environment" as const,
-            notes: `Tham chiếu bố cục. ${image.attribution}`,
-          };
-        }),
-      );
+      const { cachedUrl } = await cacheImage(image.fullUrl);
+      const asset: ReferenceAsset = {
+        id: crypto.randomUUID(),
+        name: image.attribution || "Ảnh Pexels",
+        type: "image/jpeg",
+        size: 0,
+        previewUrl: cachedUrl,
+        role: "environment",
+        notes: "Content lock: chỉ lấy bố cục và vật thể nhìn thấy trong ảnh.",
+      };
       setProject((current) => ({
         ...current,
-        references: [...current.references, ...assets],
+        references:
+          current.references.length < 6
+            ? [...current.references, asset]
+            : current.references,
       }));
-      notify(`Đã nạp ${assets.length} ảnh tham chiếu từ Pexels.`, "success");
+      setPickedRefImageIds((current) => [...current, image.id]);
+      notify("Đã thêm ảnh Pexels làm reference bối cảnh.", "success");
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Không tìm được ảnh.", "error");
-    } finally {
-      setIsFindingRefs(false);
+      notify(error instanceof Error ? error.message : "Không thêm được ảnh.", "error");
     }
   };
 
@@ -1187,10 +1205,9 @@ function SetupStep({
             <div className="section-actions">
               <button
                 className="button button-quiet button-small"
-                onClick={() => void suggestRefImages()}
-                disabled={isFindingRefs}
+                onClick={() => setIsRefSearchOpen(true)}
               >
-                {isFindingRefs ? <span className="button-loader" /> : <MagnifyingGlass size={16} />}
+                <MagnifyingGlass size={16} />
                 Gợi ý ảnh từ Pexels
               </button>
               <span className="field-help">
@@ -1269,6 +1286,14 @@ function SetupStep({
                           />
                         </Field>
                       </div>
+                      {asset.visualDescription && (
+                        <p className="reference-analysis">
+                          <strong>AI nhìn thấy:</strong> {asset.visualDescription}
+                          {asset.visualKeywords?.length
+                            ? ` Keyword: ${asset.visualKeywords.join(", ")}`
+                            : ""}
+                        </p>
+                      )}
                     </div>
                     <button
                       className="icon-button danger-button"
@@ -1351,6 +1376,19 @@ function SetupStep({
             setIsTopicOpen(false);
             notify("Đã chọn chủ đề. Bấm AI gợi ý để điền định hướng.", "success");
           }}
+        />
+      )}
+
+      {isRefSearchOpen && (
+        <ImageSearchDialog
+          beatLabel="Chọn ảnh reference cho toàn bộ video"
+          initialQuery={hasRealTitle ? project.config.title : ""}
+          aspectRatio={project.config.aspectRatio}
+          count={settings.imageSearchCount}
+          selectedIds={pickedRefImageIds}
+          applicationNote="Mỗi ảnh được thêm vào project với vai trò Bối cảnh và content lock. Trước khi viết script, AI sẽ đọc nội dung ảnh, trích keyword chính xác và dùng chúng để lập ref plan cho từng beat."
+          onPick={addSuggestedRef}
+          onClose={() => setIsRefSearchOpen(false)}
         />
       )}
 
@@ -1863,6 +1901,24 @@ function StoryboardStep({
     );
     setIsBatchGenerating(false);
   };
+
+  useEffect(() => {
+    if (
+      !project.storyboardGenerated ||
+      project.autoKeyframeBatchStarted ||
+      pendingCount === 0
+    ) {
+      return;
+    }
+    setProject((current) => ({
+      ...current,
+      autoKeyframeBatchStarted: true,
+    }));
+    notify("Preview đã sẵn sàng. Đang tự tạo batch keyframe đầu tiên.", "neutral");
+    void createBatch();
+    // createBatch phải chạy đúng một lần sau khi storyboard mới được hydrate.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.storyboardGenerated, project.autoKeyframeBatchStarted, project.id]);
 
   return (
     <section className="step-page">
@@ -2442,6 +2498,7 @@ function VideoGuide({
           end: beat.end,
           // Thiếu job là chip chương trên HUD trống — server không tự biết nhãn.
           job: beat.job,
+          overlay: beat.overlay,
           videoUrl: beat.video.url,
           videoDuration: beat.video.durationSeconds,
         })),

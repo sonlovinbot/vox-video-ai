@@ -13,6 +13,10 @@ export interface ReferenceAsset {
   previewUrl: string;
   role: RefRole;
   notes: string;
+  /** Mô tả thị giác do Gemini đọc trực tiếp từ ảnh trước khi viết script. */
+  visualDescription?: string;
+  /** Cụm từ tiếng Anh cụ thể để DeepSeek dùng khi lập searchQuery. */
+  visualKeywords?: string[];
 }
 
 export type RefLock = "identity" | "style" | "content";
@@ -178,6 +182,8 @@ export interface ProjectState {
   scriptApproved: boolean;
   castingApproved: boolean;
   storyboardGenerated: boolean;
+  /** Chặn auto batch chạy lại khi reload hoặc mở lại storyboard. */
+  autoKeyframeBatchStarted: boolean;
   searchedImages: SearchedImage[];
   timeline: VoiceTimeline;
   lastRender: RenderOutput | null;

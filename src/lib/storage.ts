@@ -88,6 +88,8 @@ export function normalizeProject(value: Partial<ProjectState>): ProjectState {
     scriptApproved: Boolean(value.scriptApproved),
     castingApproved: Boolean(value.castingApproved),
     storyboardGenerated: Boolean(value.storyboardGenerated),
+    autoKeyframeBatchStarted:
+      value.autoKeyframeBatchStarted ?? Boolean(value.storyboardGenerated),
     searchedImages: Array.isArray(value.searchedImages)
       ? value.searchedImages
       : [],

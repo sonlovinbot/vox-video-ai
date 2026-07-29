@@ -164,6 +164,10 @@ export function BeatMediaTabs({
           </div>
         )}
 
+        {beat.overlay.trim() && (
+          <span className="story-editor-overlay">{beat.overlay}</span>
+        )}
+
         <span className="story-time">
           B{beat.index.toString().padStart(2, "0")} /{" "}
           {tab === "video" && beat.video.durationSeconds

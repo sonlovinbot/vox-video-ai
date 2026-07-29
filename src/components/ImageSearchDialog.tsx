@@ -12,7 +12,9 @@ export function ImageSearchDialog({
   initialQuery,
   aspectRatio,
   count,
-  selectedId,
+  selectedId = "",
+  selectedIds = [],
+  applicationNote,
   onPick,
   onClose,
 }: {
@@ -20,14 +22,17 @@ export function ImageSearchDialog({
   initialQuery: string;
   aspectRatio: string;
   count: number;
-  selectedId: string;
-  onPick: (image: SearchedImage) => void;
+  selectedId?: string;
+  selectedIds?: string[];
+  applicationNote?: string;
+  onPick: (image: SearchedImage) => void | Promise<void>;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState(initialQuery);
   const [images, setImages] = useState<SearchedImage[]>([]);
   const [provider, setProvider] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pickingId, setPickingId] = useState("");
   const [error, setError] = useState("");
 
   const run = async (term: string) => {
@@ -97,9 +102,16 @@ export function ImageSearchDialog({
         </div>
 
         <p className="search-hint">
-          Từ khoá nên tả cảnh vật hoặc vật thể bằng tiếng Anh, không tả phong
-          cách — style đã được khoá bằng style reference.
+          Từ khoá nên tả cảnh vật hoặc vật thể bằng tiếng Anh. Không tả phong
+          cách vì style đã được khoá bằng style reference.
         </p>
+
+        {applicationNote && (
+          <div className="search-application">
+            <strong>Ảnh sẽ được áp dụng thế nào?</strong>
+            <p>{applicationNote}</p>
+          </div>
+        )}
 
         {provider === "serper" && (
           <p className="search-warning">
@@ -110,18 +122,35 @@ export function ImageSearchDialog({
         )}
 
         {error && <p className="search-error">{error}</p>}
+        {!busy && !error && images.length === 0 && (
+          <p className="search-empty">
+            Nhập keyword rồi bấm Tìm để xem ảnh trước khi thêm vào project.
+          </p>
+        )}
 
         <div className="search-grid">
           {images.map((image) => (
             <button
               key={image.id}
               className={`search-result${
-                image.id === selectedId ? " search-result-active" : ""
+                image.id === selectedId || selectedIds.includes(image.id)
+                  ? " search-result-active"
+                  : ""
               }`}
-              onClick={() => onPick(image)}
+              disabled={Boolean(pickingId)}
+              onClick={async () => {
+                setPickingId(image.id);
+                try {
+                  await onPick(image);
+                } finally {
+                  setPickingId("");
+                }
+              }}
             >
               <img src={image.thumbUrl} alt={image.attribution} loading="lazy" />
-              <span>{image.attribution}</span>
+              <span>
+                {pickingId === image.id ? "Đang thêm ảnh..." : image.attribution}
+              </span>
             </button>
           ))}
         </div>
