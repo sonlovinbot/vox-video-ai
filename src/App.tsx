@@ -196,7 +196,6 @@ function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isNewProjectTopicOpen, setIsNewProjectTopicOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
 
   useEffect(() => {
@@ -375,14 +374,12 @@ function App() {
     }, 700);
   };
 
-  const createProjectFromTopic = (title: string) => {
+  const createBlankProject = () => {
     const fresh = emptyProject();
     const nextProject = {
       ...fresh,
       config: {
         ...fresh.config,
-        title: title.trim(),
-        coverTitle: title.trim(),
         videoQuality: settings.video.quality,
       },
     };
@@ -392,9 +389,9 @@ function App() {
       projectUrl(nextProject.id),
     );
     setProject(nextProject);
-    setIsNewProjectTopicOpen(false);
     setIsSidebarOpen(false);
-    notify("Đã tạo video mới từ chủ đề đã chọn.", "success");
+    notify("Đã tạo video mới. Chọn Chủ đề để bắt đầu.", "success");
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const loadSample = () => {
@@ -506,7 +503,7 @@ function App() {
         onClose={() => setIsSidebarOpen(false)}
         onNavigate={changeStep}
         onLoadSample={loadSample}
-        onReset={() => setIsNewProjectTopicOpen(true)}
+        onReset={createBlankProject}
         onSettings={() => setIsSettingsOpen(true)}
         onHistory={() => setIsHistoryOpen(true)}
         onImport={importProjectFile}
@@ -575,13 +572,6 @@ function App() {
           )}
         </div>
       </main>
-
-      {isNewProjectTopicOpen && (
-        <TopicPickerDialog
-          onPick={(title) => createProjectFromTopic(title)}
-          onClose={() => setIsNewProjectTopicOpen(false)}
-        />
-      )}
 
       {toast && (
         <div className={`toast toast-${toast.tone}`} role="status">
