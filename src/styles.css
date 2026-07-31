@@ -1282,12 +1282,80 @@ pre {
   font-size: 10px;
 }
 
+.batch-toolbar.batch-toolbar-error {
+  background: color-mix(in srgb, #ffddd8 64%, var(--surface));
+  border-color: #df8b82;
+  box-shadow: inset 4px 0 #c94b40;
+}
+
+.batch-toolbar .batch-stop-message {
+  color: #a1372e;
+  font-weight: 750;
+}
+
 .batch-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.chatgpt-inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 9px;
+  color: var(--text-soft);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+
+.chatgpt-inline-check input {
+  accent-color: var(--accent);
+}
+
+.batch-toolbar .chatgpt-inline-check span {
+  margin: 0;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.batch-error-alert {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin: -2px 0 14px;
+  padding: 13px 15px;
+  color: #8a2921;
+  background: color-mix(in srgb, #ffddd8 78%, var(--surface));
+  border: 1px solid #e29b92;
+  border-left: 5px solid #c94b40;
+  border-radius: var(--radius-card);
+  box-shadow: 0 8px 22px rgba(116, 40, 32, 0.1);
+}
+
+.batch-error-alert > div {
+  min-width: 0;
+}
+
+.batch-error-alert strong,
+.batch-error-alert span {
+  display: block;
+}
+
+.batch-error-alert strong {
+  font-size: 12px;
+}
+
+.batch-error-alert span {
+  margin-top: 3px;
+  font-size: 10px;
+  line-height: 1.45;
 }
 
 .storyboard-grid {

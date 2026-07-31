@@ -32,6 +32,28 @@ export interface ReferenceAnalysis {
   keywords: string[];
 }
 
+export interface ExtensionBatchTask {
+  taskId: string;
+  beatId: string;
+  state: string;
+  error?: { code: string; message: string };
+  result?: {
+    url: string;
+    checksum: string;
+    mimeType: string;
+    byteLength: number;
+    savedAt: string;
+  };
+}
+
+export interface ExtensionBatch {
+  protocol: "vox-chatgpt/1";
+  batchId: string;
+  projectId: string;
+  state: string;
+  tasks: ExtensionBatchTask[];
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
   const body = await response.json().catch(() => ({}));
@@ -43,6 +65,29 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     );
   }
   return body as T;
+}
+
+export function createChatGPTBatch(payload: {
+  projectId: string;
+  tasks: Array<{
+    beatId: string;
+    prompt: string;
+    aspectRatio: string;
+    references: Array<{ id: string; name: string; url: string; type?: string }>;
+    expectedOutputName: string;
+  }>;
+}) {
+  return apiFetch<ExtensionBatch>("/api/extension/batches", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ protocol: "vox-chatgpt/1", ...payload }),
+  });
+}
+
+export function getChatGPTBatch(batchId: string) {
+  return apiFetch<ExtensionBatch>(
+    `/api/extension/batches/${encodeURIComponent(batchId)}`,
+  );
 }
 
 export function getProviderStatus() {

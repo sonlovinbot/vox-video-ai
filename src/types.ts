@@ -215,6 +215,7 @@ export type ScriptProvider = "deepseek" | "template";
 export type ImageProvider = "coachio" | "gemini";
 export type VoiceProvider = "elevenlabs" | "browser";
 export type ImageResolution = "1k" | "2k" | "4k";
+export type ChatGPTExtensionMode = "auto" | "manual";
 
 export interface AppSettings {
   scriptProvider: ScriptProvider;
@@ -232,6 +233,9 @@ export interface AppSettings {
   searchPexels: boolean;
   searchSerper: boolean;
   imageSearchCount: number;
+  chatgptExtensionMode: ChatGPTExtensionMode;
+  chatgptOpenNewConversation: boolean;
+  chatgptResetWorkspace: boolean;
   replicateModel: string;
   video: VideoSettings;
   groqModel: string;

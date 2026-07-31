@@ -26,6 +26,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import ffmpegStatic from "ffmpeg-static";
 import type { VideoSettings } from "../src/types";
+import { createExtensionRouter } from "./extensionBatches";
 
 dotenv.config({ path: ".env.local", quiet: true });
 dotenv.config({ quiet: true });
@@ -47,6 +48,7 @@ fs.mkdirSync(videosDir, { recursive: true });
 fs.mkdirSync(audioDir, { recursive: true });
 fs.mkdirSync(rendersDir, { recursive: true });
 app.use("/generated", express.static(generatedDir));
+app.use("/api/extension", createExtensionRouter(generatedDir));
 
 class HttpError extends Error {
   status: number;

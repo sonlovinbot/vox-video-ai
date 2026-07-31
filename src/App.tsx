@@ -64,6 +64,9 @@ import {
   transcribeVoice,
   generateVoice,
   getProviderStatus,
+  buildSlotPayload,
+  createChatGPTBatch,
+  getChatGPTBatch,
 } from "./lib/api";
 import { loadSettings, saveSettings } from "./lib/settings";
 import {
@@ -91,10 +94,20 @@ import {
 } from "./lib/timeline";
 import { VIDEO_PRESETS, qualityLabels } from "./lib/video";
 import { runWithLimit } from "./lib/concurrency";
+import {
+  imageRunContinuation,
+  selectImageRunCandidates,
+  splitImageRunWaves,
+} from "./lib/imageRuns";
 import { beatsNeedingVideo, framesForBeat, resolveVideoSettings } from "./lib/video";
 import { emptyRefPlan, parseRefPlanFromAI } from "./lib/casting";
 import { emptyBeatVideo } from "./lib/video";
 import { projectIdFromUrl, projectUrl } from "./lib/projectUrl";
+import {
+  checkChatGPTExtension,
+  openChatGPTExtensionPanel,
+  startBatchInExtension,
+} from "./lib/extensionBridge";
 import {
   deleteProjectById,
   listProjects,
@@ -582,6 +595,7 @@ function App() {
             <StoryboardStep
               project={project}
               setProject={setProject}
+              setSettings={setSettings}
               notify={notify}
               onBack={() => changeStep("casting")}
               onExport={exportProject}
@@ -1676,6 +1690,7 @@ function ScriptStep({
 function StoryboardStep({
   project,
   setProject,
+  setSettings,
   notify,
   onBack,
   onExport,
@@ -1684,6 +1699,7 @@ function StoryboardStep({
 }: {
   project: ProjectState;
   setProject: React.Dispatch<React.SetStateAction<ProjectState>>;
+  setSettings: React.Dispatch<React.SetStateAction<AppSettings>>;
   notify: (message: string, tone?: ToastState["tone"]) => void;
   onBack: () => void;
   onExport: () => void;
@@ -1698,9 +1714,20 @@ function StoryboardStep({
   const [isExportPackOpen, setIsExportPackOpen] = useState(false);
   const [isVideoBatchOpen, setIsVideoBatchOpen] = useState(false);
   const [isBatchVideo, setIsBatchVideo] = useState(false);
+  const [extensionBatchId, setExtensionBatchId] = useState(
+    () => localStorage.getItem(`vox:chatgpt-batch:${project.id}`) || "",
+  );
+  const [chatGPTContinuousRun, setChatGPTContinuousRun] = useState(
+    () => localStorage.getItem(`vox:chatgpt-continuous:${project.id}`) === "1",
+  );
+  const [isCreatingExtensionBatch, setIsCreatingExtensionBatch] = useState(false);
+  const [extensionBridgeError, setExtensionBridgeError] = useState("");
   const [imageFilter, setImageFilter] = useState<"all" | "failed">("all");
   const [mediaTabs, setMediaTabs] = useState<Record<string, MediaTab>>({});
   const imageAbort = useRef<AbortController | null>(null);
+  const chatGPTBatchLaunch = useRef(false);
+  const reportedChatGPTErrorBatch = useRef("");
+  const chatGPTRetryGraceUntil = useRef(0);
   // Một controller cho cả lượt: bấm Dừng là abort hết, server nhận được và gọi
   // cancel lên Replicate cho từng prediction đang chạy.
   const videoAbort = useRef<AbortController | null>(null);
@@ -1725,6 +1752,248 @@ function StoryboardStep({
       ? project.beats.filter((beat) => beat.generationStatus === "failed")
       : project.beats;
   const ratioClass = `storyboard-ratio-${project.config.aspectRatio.replace(":", "-")}`;
+  const updateChatGPTContinuousRun = (enabled: boolean) => {
+    setChatGPTContinuousRun(enabled);
+    if (enabled) {
+      localStorage.setItem(`vox:chatgpt-continuous:${project.id}`, "1");
+    } else {
+      localStorage.removeItem(`vox:chatgpt-continuous:${project.id}`);
+    }
+  };
+
+  useEffect(() => {
+    if (!extensionBatchId) return;
+    let stopped = false;
+    const sync = async () => {
+      try {
+        const batch = await getChatGPTBatch(extensionBatchId);
+        if (stopped) return;
+        setProject((current) => ({
+          ...current,
+          beats: current.beats.map((beat) => {
+            const task = batch.tasks.find((item) => item.beatId === beat.id);
+            if (!task) return beat;
+            if (task.state === "completed" && task.result?.url) {
+              return {
+                ...beat,
+                outputImage: task.result.url,
+                outputName: beat.outputName || `B${beat.index.toString().padStart(2, "0")}-chatgpt.png`,
+                generationStatus: "completed",
+                generationError: "",
+                imageProvider: "chatgpt",
+              };
+            }
+            if (task.state === "failed") {
+              return {
+                ...beat,
+                generationStatus: "failed",
+                generationError: task.error
+                  ? `${task.error.code}: ${task.error.message}`
+                  : "ChatGPT extension task failed.",
+              };
+            }
+            if (["claiming", "uploading_references", "submitting", "waiting", "collecting", "returning"].includes(task.state)) {
+              return { ...beat, generationStatus: "generating", generationError: "" };
+            }
+            if (task.state === "queued") {
+              return { ...beat, generationStatus: "queued", generationError: "" };
+            }
+            return beat;
+          }),
+        }));
+        const failedTasks = batch.tasks.filter((task) => task.state === "failed");
+        if (
+          failedTasks.length &&
+          Date.now() >= chatGPTRetryGraceUntil.current
+        ) {
+          updateChatGPTContinuousRun(false);
+          const message =
+            `${failedTasks.length} ảnh ChatGPT bị lỗi. Chuỗi đã dừng; ` +
+            "bấm Start / reconnect extension để thử lại và tiếp tục đến hết.";
+          setExtensionBridgeError(message);
+          if (reportedChatGPTErrorBatch.current !== batch.batchId) {
+            reportedChatGPTErrorBatch.current = batch.batchId;
+            notify(message, "error");
+          }
+        }
+        if (["completed", "canceled"].includes(batch.state)) {
+          localStorage.removeItem(`vox:chatgpt-batch:${project.id}`);
+          setExtensionBatchId("");
+          if (batch.state === "completed") {
+            reportedChatGPTErrorBatch.current = "";
+            setExtensionBridgeError("");
+            notify(
+              chatGPTContinuousRun
+                ? "ChatGPT đã xong nhóm hiện tại. Đang chuẩn bị nhóm tiếp theo..."
+                : "ChatGPT đã hoàn tất batch storyboard.",
+              chatGPTContinuousRun ? "neutral" : "success",
+            );
+          } else {
+            updateChatGPTContinuousRun(false);
+          }
+        }
+      } catch {
+        // A temporary API failure must not discard the durable batch identity.
+      }
+    };
+    void sync();
+    const timer = window.setInterval(() => void sync(), 2500);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    chatGPTContinuousRun,
+    extensionBatchId,
+    project.id,
+    notify,
+    setProject,
+  ]);
+
+  const generateWithChatGPT = async (continuation = false) => {
+    if (chatGPTBatchLaunch.current) return;
+    const beats =
+      splitImageRunWaves(
+        selectImageRunCandidates(project.beats, "failed"),
+        5,
+      )[0] || [];
+    if (!beats.length) {
+      updateChatGPTContinuousRun(false);
+      notify("Mọi beat đã có keyframe.", continuation ? "success" : "neutral");
+      return;
+    }
+    chatGPTBatchLaunch.current = true;
+    updateChatGPTContinuousRun(true);
+    const panelOpening = openChatGPTExtensionPanel();
+    void panelOpening.catch(() => {});
+    setIsCreatingExtensionBatch(true);
+    setExtensionBridgeError("");
+    try {
+      const extension = await checkChatGPTExtension();
+      await panelOpening;
+      if (!extension.installed || !extension.connected) {
+        throw new Error("Extension chưa sẵn sàng kết nối với VOX.");
+      }
+      const tasks = await Promise.all(
+        beats.map(async (beat) => {
+          const slots = await buildSlotPayload(
+            beat.refPlan.slots,
+            project.references,
+            project.searchedImages,
+          );
+          return {
+            beatId: beat.id,
+            prompt: beat.imagePrompt,
+            aspectRatio: project.config.aspectRatio,
+            references: slots.map((slot, index) => {
+              const source = slot.kind === "upload" ? slot.dataUrl : slot.url;
+              return {
+                id: `${beat.id}-ref-${index + 1}`,
+                name: `B${beat.index.toString().padStart(2, "0")}-ref-${index + 1}.png`,
+                url: source,
+              };
+            }),
+            expectedOutputName: `B${beat.index.toString().padStart(2, "0")}-chatgpt.png`,
+          };
+        }),
+      );
+      const batch = await createChatGPTBatch({ projectId: project.id, tasks });
+      localStorage.setItem(`vox:chatgpt-batch:${project.id}`, batch.batchId);
+      setExtensionBatchId(batch.batchId);
+      await navigator.clipboard.writeText(batch.batchId).catch(() => {});
+      setProject((current) => ({
+        ...current,
+        beats: current.beats.map((beat) =>
+          beats.some((item) => item.id === beat.id)
+            ? { ...beat, generationStatus: "queued", generationError: "" }
+            : beat,
+        ),
+      }));
+      try {
+        await startBatchInExtension(batch.batchId, {
+          executionMode: settings.chatgptExtensionMode,
+          openNewChat: settings.chatgptOpenNewConversation,
+          resetWorkspace: settings.chatgptResetWorkspace,
+        });
+        notify(
+          settings.chatgptExtensionMode === "auto"
+            ? "Extension đã nhận batch. Đang mở ChatGPT và bắt đầu tạo ảnh."
+            : "Extension đã nạp prompt và reference. Hãy kiểm tra rồi bấm Thêm và chạy.",
+          "success",
+        );
+      } catch (bridgeError) {
+        const message =
+          bridgeError instanceof Error
+            ? bridgeError.message
+            : "Extension không nhận batch.";
+        setExtensionBridgeError(message);
+        updateChatGPTContinuousRun(false);
+        notify(message, "error");
+      }
+    } catch (error) {
+      updateChatGPTContinuousRun(false);
+      notify(error instanceof Error ? error.message : "Không tạo được ChatGPT batch.", "error");
+    } finally {
+      chatGPTBatchLaunch.current = false;
+      setIsCreatingExtensionBatch(false);
+    }
+  };
+
+  const reconnectChatGPTExtension = async () => {
+    if (!extensionBatchId) return;
+    const panelOpening = openChatGPTExtensionPanel();
+    setIsCreatingExtensionBatch(true);
+    setExtensionBridgeError("");
+    chatGPTRetryGraceUntil.current = Date.now() + 30_000;
+    updateChatGPTContinuousRun(true);
+    try {
+      await panelOpening;
+      await startBatchInExtension(extensionBatchId, {
+        executionMode: settings.chatgptExtensionMode,
+        openNewChat: settings.chatgptOpenNewConversation,
+        resetWorkspace: settings.chatgptResetWorkspace,
+      });
+      notify("Extension đã kết nối lại và nhận ChatGPT batch.", "success");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Extension không nhận batch.";
+      setExtensionBridgeError(message);
+      updateChatGPTContinuousRun(false);
+      notify(message, "error");
+    } finally {
+      setIsCreatingExtensionBatch(false);
+    }
+  };
+
+  useEffect(() => {
+    if (
+      !chatGPTContinuousRun ||
+      extensionBatchId ||
+      isCreatingExtensionBatch ||
+      chatGPTBatchLaunch.current
+    ) {
+      return;
+    }
+    const continuation = imageRunContinuation(project.beats);
+    if (continuation === "blocked_by_error") {
+      updateChatGPTContinuousRun(false);
+      return;
+    }
+    if (continuation === "complete") {
+      updateChatGPTContinuousRun(false);
+      notify("ChatGPT đã tạo xong toàn bộ keyframe storyboard.", "success");
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void generateWithChatGPT(true);
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [
+    chatGPTContinuousRun,
+    extensionBatchId,
+    isCreatingExtensionBatch,
+    project.beats,
+  ]);
 
   const copyText = async (text: string, label: string) => {
     try {
@@ -1965,13 +2234,7 @@ function StoryboardStep({
   };
 
   const createBatch = async (mode: "new" | "failed") => {
-    const candidates = project.beats
-      .filter((beat) =>
-        mode === "failed"
-          ? beat.generationStatus === "failed"
-          : !beat.outputImage && beat.generationStatus !== "failed",
-      )
-      .slice(0, 5);
+    const candidates = selectImageRunCandidates(project.beats, mode);
     if (!candidates.length) {
       notify(
         mode === "failed"
@@ -1984,32 +2247,48 @@ function StoryboardStep({
     setIsBatchGenerating(true);
     const controller = new AbortController();
     imageAbort.current = controller;
-    setProject((current) => ({
-      ...current,
-      beats: current.beats.map((beat) =>
-        candidates.some((candidate) => candidate.id === beat.id)
-          ? { ...beat, generationStatus: "queued", generationError: "" }
-          : beat,
-      ),
-    }));
     let completed = 0;
     let failed = 0;
-    await runWithLimit(candidates, 5, async (beat) => {
-      if (controller.signal.aborted) {
-        setProject((current) => ({
-          ...current,
-          beats: current.beats.map((item) =>
-            item.id === beat.id
-              ? { ...item, generationStatus: "canceled" }
-              : item,
-          ),
-        }));
-        return;
+    let processed = 0;
+    const waves = splitImageRunWaves(candidates, 5);
+    for (const wave of waves) {
+      if (controller.signal.aborted || failed > 0) break;
+      setProject((current) => ({
+        ...current,
+        beats: current.beats.map((beat) =>
+          wave.some((candidate) => candidate.id === beat.id)
+            ? { ...beat, generationStatus: "queued", generationError: "" }
+            : beat,
+        ),
+      }));
+      let waveFailed = 0;
+      await runWithLimit(wave, 5, async (beat) => {
+        if (controller.signal.aborted) {
+          setProject((current) => ({
+            ...current,
+            beats: current.beats.map((item) =>
+              item.id === beat.id
+                ? { ...item, generationStatus: "canceled" }
+                : item,
+            ),
+          }));
+          return;
+        }
+        const ok = await createKeyframe(beat, controller.signal, true);
+        processed += 1;
+        if (ok) completed += 1;
+        else if (!controller.signal.aborted) {
+          failed += 1;
+          waveFailed += 1;
+        }
+      });
+      if (!controller.signal.aborted && waveFailed === 0 && processed < candidates.length) {
+        notify(
+          `Đã xong ${completed}/${candidates.length} ảnh. Đang chạy nhóm tiếp theo...`,
+          "neutral",
+        );
       }
-      const ok = await createKeyframe(beat, controller.signal, true);
-      if (ok) completed += 1;
-      else if (!controller.signal.aborted) failed += 1;
-    });
+    }
     imageAbort.current = null;
     setIsBatchGenerating(false);
     if (controller.signal.aborted) {
@@ -2017,10 +2296,11 @@ function StoryboardStep({
     } else {
       notify(
         failed
-          ? `Batch hoàn tất: ${completed} ảnh thành công, ${failed} ảnh lỗi.`
+          ? `Đã dừng sau ${completed} ảnh thành công vì có ${failed} ảnh lỗi. ` +
+            "Bấm “Thử lại và tiếp tục” để chạy tiếp đến hết."
           : mode === "failed"
-            ? `Đã khôi phục ${completed} keyframe lỗi.`
-            : `Đã tạo xong ${completed} keyframe trong batch.`,
+            ? `Đã khôi phục và tạo xong toàn bộ ${completed} keyframe còn thiếu.`
+            : `Đã tạo xong toàn bộ ${completed} keyframe còn thiếu.`,
         failed ? "error" : "success",
       );
     }
@@ -2113,15 +2393,68 @@ function StoryboardStep({
             </div>
           </div>
 
-          <div className="batch-toolbar">
+          <div
+            className={`batch-toolbar ${
+              failedImageCount ? "batch-toolbar-error" : ""
+            }`}
+          >
             <div>
               <strong>
                 {newImageCount} ảnh chưa tạo
                 {failedImageCount ? `, ${failedImageCount} ảnh lỗi` : ""}
               </strong>
-              <span>Chỉ tạo ảnh khi bạn bấm nút. Mỗi batch tối đa 5 beat.</span>
+              <span>
+                Mỗi nhóm tối đa 5 beat. Nhóm thành công sẽ tự chạy tiếp cho
+                đến khi toàn bộ storyboard có ảnh.
+              </span>
+              {failedImageCount > 0 && (
+                <span className="batch-stop-message">
+                  Chuỗi đang dừng tại ảnh lỗi. Bấm “Thử lại và tiếp tục đến
+                  hết” để chạy tiếp.
+                </span>
+              )}
+              {extensionBatchId && (
+                <span>
+                  ChatGPT batch: {extensionBatchId}
+                  {extensionBridgeError
+                    ? ` · ${extensionBridgeError}`
+                    : chatGPTContinuousRun
+                      ? " · Đang chạy liên tục đến hết"
+                      : " · Extension đang xử lý"}
+                </span>
+              )}
             </div>
             <div className="batch-actions">
+              <label className="chatgpt-inline-check">
+                <input
+                  type="checkbox"
+                  checked={settings.chatgptOpenNewConversation}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      chatgptOpenNewConversation: event.target.checked,
+                    }))
+                  }
+                />
+                <span>Mở tab ChatGPT mới</span>
+              </label>
+              <button
+                className="button button-quiet"
+                disabled={isCreatingExtensionBatch}
+                onClick={() =>
+                  void (extensionBatchId
+                    ? reconnectChatGPTExtension()
+                    : generateWithChatGPT())
+                }
+                title={extensionBatchId ? `Batch đang chạy: ${extensionBatchId}` : undefined}
+              >
+                <Sparkle size={18} weight="fill" />
+                {extensionBatchId
+                  ? "Start / reconnect extension"
+                  : isCreatingExtensionBatch
+                    ? "Đang tạo batch..."
+                    : "Generate all with ChatGPT"}
+              </button>
               {isBatchGenerating ? (
                 <button className="button button-danger" onClick={stopImageBatch}>
                   <Stop size={18} weight="fill" />
@@ -2146,7 +2479,7 @@ function StoryboardStep({
                     onClick={() => void createBatch("failed")}
                   >
                     <ArrowsClockwise size={18} />
-                    Thử lại {Math.min(5, failedImageCount)} ảnh lỗi
+                    Thử lại và tiếp tục đến hết
                   </button>
                 </>
               )}
@@ -2157,14 +2490,36 @@ function StoryboardStep({
                 >
                   <Stack size={18} weight="fill" />
                   {canceledImageCount
-                    ? `Tiếp tục ${Math.min(5, newImageCount)} ảnh`
-                    : `Tạo ${Math.min(5, newImageCount)} ảnh tiếp theo`}
+                    ? `Tiếp tục ${newImageCount} ảnh đến hết`
+                    : `Tạo toàn bộ ${newImageCount} ảnh`}
                 </button>
               )}
                 </>
               )}
             </div>
           </div>
+
+          {extensionBridgeError && (
+            <div className="batch-error-alert" role="alert">
+              <WarningCircle size={24} weight="fill" />
+              <div>
+                <strong>Chuỗi ChatGPT đã dừng vì lỗi</strong>
+                <span>{extensionBridgeError}</span>
+              </div>
+              <button
+                className="button button-danger"
+                disabled={isCreatingExtensionBatch}
+                onClick={() =>
+                  void (extensionBatchId
+                    ? reconnectChatGPTExtension()
+                    : generateWithChatGPT())
+                }
+              >
+                <ArrowsClockwise size={18} />
+                Thử lại và tiếp tục đến hết
+              </button>
+            </div>
+          )}
 
           <div className={`storyboard-grid ${ratioClass}`}>
             {visibleBeats.map((beat) => (
@@ -3291,6 +3646,45 @@ function SettingsDialog({
                   {status.serper ? "✓" : "✗"}.
                 </>
               )}
+            </p>
+          </div>
+
+          <div className="settings-section">
+            <div className="settings-section-title">
+              <Sparkle size={21} weight="fill" />
+              <div>
+                <h3>ChatGPT extension</h3>
+                <p>Điều khiển cách VOX chuyển storyboard sang Auto ChatGPT Images.</p>
+              </div>
+            </div>
+            <Field label="Sau khi nạp batch">
+              <select
+                value={settings.chatgptExtensionMode}
+                onChange={(event) =>
+                  update(
+                    "chatgptExtensionMode",
+                    event.target.value as AppSettings["chatgptExtensionMode"],
+                  )
+                }
+              >
+                <option value="auto">Tự động nạp và chạy toàn bộ</option>
+                <option value="manual">Chỉ nạp vào Tạo ảnh hàng loạt</option>
+              </select>
+            </Field>
+            <ToggleRow
+              label="Mở tab ChatGPT mới cho mỗi batch VOX"
+              checked={settings.chatgptOpenNewConversation}
+              onChange={(value) => update("chatgptOpenNewConversation", value)}
+            />
+            <ToggleRow
+              label="Reset workspace VOX khi nhận batch mới"
+              checked={settings.chatgptResetWorkspace}
+              onChange={(value) => update("chatgptResetWorkspace", value)}
+            />
+            <p className="field-help">
+              Chế độ thủ công nạp đúng prompt và ảnh reference vào tab Tạo ảnh hàng loạt.
+              Bạn kiểm tra dữ liệu rồi bấm “Thêm và chạy”. Liên kết project/beat
+              vẫn được giữ để kết quả trả về đúng storyboard.
             </p>
           </div>
 
