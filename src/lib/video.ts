@@ -84,6 +84,7 @@ export function framesForBeat(beat: Beat, fps: number) {
 export function emptyBeatVideo(): BeatVideo {
   return {
     status: "idle",
+    name: "",
     url: "",
     remoteUrl: "",
     predictionId: "",

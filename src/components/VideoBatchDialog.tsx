@@ -23,6 +23,7 @@ export function VideoBatchDialog({
   const video = resolveVideoSettings(settings.video.quality, settings.video);
   const estimate = estimateBatch(beats, video);
   const withoutKeyframe = beats.filter((beat) => !beat.outputImage).length;
+  const continuing = beats.some((beat) => beat.video.status === "canceled");
 
   return (
     <div className="settings-layer" role="presentation" onMouseDown={onClose}>
@@ -35,7 +36,9 @@ export function VideoBatchDialog({
       >
         <header className="settings-header">
           <div>
-            <h2 id="video-batch-title">Dựng video hàng loạt</h2>
+            <h2 id="video-batch-title">
+              {continuing ? "Tiếp tục dựng video" : "Dựng video hàng loạt"}
+            </h2>
             <p>Mỗi keyframe thành một đoạn video theo motion prompt của beat đó.</p>
           </div>
           <button className="icon-button" onClick={onClose} aria-label="Đóng">
@@ -92,7 +95,7 @@ export function VideoBatchDialog({
             disabled={estimate.count === 0}
           >
             <FilmStrip size={18} />
-            Dựng {estimate.count} video
+            {continuing ? "Tiếp tục" : "Dựng"} {estimate.count} video
           </button>
         </div>
       </section>

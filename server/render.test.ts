@@ -134,6 +134,28 @@ describe("buildAssFile", () => {
     });
     expect(out).toContain("Be Vietnam Pro,80");
   });
+
+  it("đặt editor overlay ở phía trên, sau thời lượng cover", () => {
+    const out = buildAssFile([realPhrase], 1080, 1920, undefined, {
+      coverEyebrow: "GIẢI THÍCH",
+      coverTitle: "Tiêu đề",
+      coverSeconds: 1.5,
+      chapters: [
+        {
+          index: 1,
+          label: "Đặt mua",
+          overlay: "Một cú chạm bắt đầu",
+          start: 0,
+          end: 3,
+        },
+      ],
+    });
+    expect(out).toContain("Style: Overlay");
+    expect(out).toContain(
+      "Dialogue: 2,0:00:01.50,0:00:03.00,Overlay",
+    );
+    expect(out).toContain("\\pos(540,202)\\an8}Một cú chạm bắt đầu");
+  });
 });
 
 describe("buildConcatPlan", () => {

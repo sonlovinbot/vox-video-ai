@@ -26,6 +26,34 @@ export interface ImageGenerationResult {
   taskId?: string;
 }
 
+export interface ReferenceAnalysis {
+  id: string;
+  description: string;
+  keywords: string[];
+}
+
+export interface ExtensionBatchTask {
+  taskId: string;
+  beatId: string;
+  state: string;
+  error?: { code: string; message: string };
+  result?: {
+    url: string;
+    checksum: string;
+    mimeType: string;
+    byteLength: number;
+    savedAt: string;
+  };
+}
+
+export interface ExtensionBatch {
+  protocol: "vox-chatgpt/1";
+  batchId: string;
+  projectId: string;
+  state: string;
+  tasks: ExtensionBatchTask[];
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
   const body = await response.json().catch(() => ({}));
@@ -39,8 +67,43 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+export function createExtensionBatch(payload: {
+  projectId: string;
+  tasks: Array<{
+    beatId: string;
+    prompt: string;
+    aspectRatio: string;
+    references: Array<{ id: string; name: string; url: string; type?: string }>;
+    expectedOutputName: string;
+  }>;
+}) {
+  return apiFetch<ExtensionBatch>("/api/extension/batches", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ protocol: "vox-chatgpt/1", ...payload }),
+  });
+}
+
+export function getExtensionBatch(batchId: string) {
+  return apiFetch<ExtensionBatch>(
+    `/api/extension/batches/${encodeURIComponent(batchId)}`,
+  );
+}
+
 export function getProviderStatus() {
   return apiFetch<{ providers: ProviderStatus }>("/api/settings/status");
+}
+
+export type ApiKeyProvider = keyof ProviderStatus;
+
+export function updateProviderKeys(
+  keys: Partial<Record<ApiKeyProvider, string>>,
+) {
+  return apiFetch<{ providers: ProviderStatus }>("/api/settings/keys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keys }),
+  });
 }
 
 export function generateScriptWithAI(
@@ -49,7 +112,7 @@ export function generateScriptWithAI(
   settings: AppSettings,
   signal?: AbortSignal,
 ) {
-  return apiFetch<{ beats: ScriptBeat[]; model: string }>("/api/script/generate", {
+  return apiFetch<{ beats: ScriptBeat[]; model: string; elapsedMs?: number }>("/api/script/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -61,24 +124,55 @@ export function generateScriptWithAI(
         name: asset.name,
         role: asset.role,
         notes: asset.notes,
+        visualDescription: asset.visualDescription || "",
+        visualKeywords: asset.visualKeywords || [],
       })),
     }),
     signal,
   });
 }
 
+export async function analyzeReferences(
+  references: ReferenceAsset[],
+  signal?: AbortSignal,
+) {
+  const payload = await Promise.all(
+    references.slice(0, 6).map(async (asset) => ({
+      id: asset.id,
+      name: asset.name,
+      role: asset.role,
+      notes: asset.notes,
+      dataUrl: await previewToDataUrl(asset),
+    })),
+  );
+  return apiFetch<{ analyses: ReferenceAnalysis[]; model: string }>(
+    "/api/references/analyze",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ references: payload }),
+      signal,
+    },
+  );
+}
+
 export function searchImages(
   query: string,
   aspectRatio: string,
   count: number,
+  sources: Array<"pexels" | "serper"> = ["pexels", "serper"],
   signal?: AbortSignal,
 ) {
-  return apiFetch<{ images: SearchedImage[]; provider: string }>(
+  return apiFetch<{
+    images: SearchedImage[];
+    providers: string[];
+    query: string;
+  }>(
     "/api/images/search",
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, aspectRatio, count }),
+      body: JSON.stringify({ query, aspectRatio, count, sources }),
       signal,
     },
   );
@@ -117,6 +211,21 @@ export function generateVideo(
       model: settings.replicateModel,
       settings: settings.video,
     }),
+    signal,
+  });
+}
+
+export async function uploadVideo(file: File, signal?: AbortSignal) {
+  const form = new FormData();
+  form.append("video", file, file.name);
+  return apiFetch<{
+    url: string;
+    originalName: string;
+    mimeType: string;
+    byteLength: number;
+  }>("/api/video/upload", {
+    method: "POST",
+    body: form,
     signal,
   });
 }
@@ -261,6 +370,7 @@ export function renderVideo(
     start: number;
     end: number;
     job: string;
+    overlay: string;
     videoUrl: string;
     videoDuration: number;
   }>,

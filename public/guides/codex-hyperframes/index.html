@@ -1,0 +1,1658 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Quy trình trực quan giúp người không rành kỹ thuật tạo video bằng Codex và HyperFrames."
+    />
+    <title>Quy trình tạo video với Codex và HyperFrames</title>
+    <style>
+      :root {
+        --paper: #f4f0e6;
+        --paper-deep: #ebe4d4;
+        --surface: #fffdf7;
+        --ink: #17312d;
+        --muted: #64706b;
+        --line: #d7d2c5;
+        --accent: #087f78;
+        --accent-soft: #d9eeea;
+        --accent-dark: #075f5a;
+        --warm: #d9864e;
+        --shadow: 0 18px 50px rgba(45, 58, 51, 0.09);
+        --radius: 20px;
+        --max: 1240px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+        scroll-padding-top: 96px;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 8% 8%, rgba(8, 127, 120, 0.07), transparent 26rem),
+          linear-gradient(90deg, rgba(76, 65, 44, 0.022) 1px, transparent 1px),
+          var(--paper);
+        background-size: auto, 48px 48px, auto;
+        font-family: "Avenir Next", Avenir, "Segoe UI", Helvetica, Arial, sans-serif;
+        line-height: 1.55;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      img {
+        display: block;
+        max-width: 100%;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      button {
+        font: inherit;
+      }
+
+      .wrap {
+        width: min(calc(100% - 40px), var(--max));
+        margin-inline: auto;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 12;
+        border-bottom: 1px solid rgba(23, 49, 45, 0.13);
+        background: rgba(244, 240, 230, 0.88);
+        backdrop-filter: blur(18px);
+      }
+
+      .topbar-inner {
+        min-height: 72px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        text-decoration: none;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+      }
+
+      .brand-mark {
+        display: grid;
+        width: 38px;
+        height: 38px;
+        place-items: center;
+        color: #f7f4eb;
+        border-radius: 12px;
+        background: var(--accent);
+        box-shadow: inset 0 1px rgba(255, 255, 255, 0.35);
+      }
+
+      .topnav {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .topnav a {
+        padding: 10px 13px;
+        color: var(--muted);
+        border-radius: 12px;
+        text-decoration: none;
+        font-size: 0.9rem;
+        font-weight: 700;
+      }
+
+      .topnav a:hover,
+      .topnav a.active {
+        color: var(--accent-dark);
+        background: var(--accent-soft);
+      }
+
+      .top-action,
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 44px;
+        padding: 0 18px;
+        color: #f7f4eb;
+        border: 1px solid var(--accent);
+        border-radius: 12px;
+        background: var(--accent);
+        text-decoration: none;
+        font-weight: 800;
+        white-space: nowrap;
+        cursor: pointer;
+        transition: transform 180ms ease, background 180ms ease;
+      }
+
+      .top-action:hover,
+      .button:hover {
+        background: var(--accent-dark);
+        transform: translateY(-1px);
+      }
+
+      .top-action:active,
+      .button:active {
+        transform: translateY(1px);
+      }
+
+      .hero {
+        min-height: calc(100dvh - 72px);
+        display: grid;
+        grid-template-columns: minmax(0, 0.84fr) minmax(0, 1.16fr);
+        align-items: center;
+        gap: 54px;
+        padding-block: 56px;
+      }
+
+      .eyebrow {
+        display: inline-block;
+        margin: 0 0 18px;
+        color: var(--accent-dark);
+        font-size: 0.75rem;
+        font-weight: 900;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        max-width: 12ch;
+        margin-bottom: 20px;
+        font-size: clamp(3rem, 6vw, 5.5rem);
+        line-height: 0.96;
+        letter-spacing: -0.065em;
+      }
+
+      .hero-lead {
+        max-width: 32rem;
+        margin-bottom: 28px;
+        color: var(--muted);
+        font-size: clamp(1.02rem, 1.5vw, 1.2rem);
+      }
+
+      .hero-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      .button.secondary {
+        color: var(--ink);
+        border-color: var(--line);
+        background: var(--surface);
+      }
+
+      .button.secondary:hover {
+        border-color: var(--accent);
+        background: var(--accent-soft);
+      }
+
+      .hero-visual {
+        position: relative;
+        align-self: stretch;
+        min-height: 510px;
+      }
+
+      .hero-frame {
+        position: absolute;
+        inset: 4% 0 7% 6%;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        box-shadow: var(--shadow);
+        transform: rotate(1.3deg);
+      }
+
+      .hero-frame img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: 55% center;
+      }
+
+      .paper-note {
+        position: absolute;
+        z-index: 2;
+        max-width: 240px;
+        padding: 18px 20px;
+        color: var(--ink);
+        border: 1px solid rgba(23, 49, 45, 0.12);
+        background: #f1c864;
+        box-shadow: 0 14px 30px rgba(69, 55, 30, 0.16);
+        font-weight: 800;
+        transform: rotate(-3deg);
+      }
+
+      .paper-note.top {
+        top: 0;
+        right: 4%;
+      }
+
+      .paper-note.bottom {
+        right: 13%;
+        bottom: 0;
+        color: #f7f4eb;
+        background: var(--accent);
+        transform: rotate(2deg);
+      }
+
+      .role-strip {
+        padding: 22px 0 24px;
+        color: #f7f4eb;
+        background: var(--ink);
+      }
+
+      .roles {
+        display: grid;
+        grid-template-columns: 0.8fr 1fr 1fr;
+        gap: 18px;
+        align-items: stretch;
+      }
+
+      .role-intro {
+        padding: 18px 18px 18px 0;
+      }
+
+      .role-intro strong {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 1.35rem;
+      }
+
+      .role-intro span {
+        color: rgba(255, 255, 255, 0.64);
+      }
+
+      .role {
+        padding: 20px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: var(--radius);
+        background: rgba(255, 255, 255, 0.055);
+      }
+
+      .role b {
+        display: block;
+        margin-bottom: 6px;
+        color: #8ed7cf;
+      }
+
+      .role p {
+        margin-bottom: 0;
+        color: rgba(255, 255, 255, 0.76);
+        font-size: 0.92rem;
+      }
+
+      .section {
+        padding-block: 112px;
+      }
+
+      .section.compact {
+        padding-block: 78px;
+      }
+
+      .section-heading {
+        max-width: 730px;
+        margin-bottom: 44px;
+      }
+
+      .section-heading h2,
+      .step-copy h2 {
+        margin-bottom: 14px;
+        font-size: clamp(2.25rem, 4vw, 4.5rem);
+        line-height: 1;
+        letter-spacing: -0.055em;
+      }
+
+      .section-heading p,
+      .step-copy > p {
+        max-width: 62ch;
+        margin-bottom: 0;
+        color: var(--muted);
+        font-size: 1.05rem;
+      }
+
+      .overview-grid {
+        display: grid;
+        grid-template-columns: 1.25fr 0.75fr;
+        gap: 22px;
+      }
+
+      .overview-map {
+        padding: 38px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .overview-map ol {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px 24px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .overview-map li {
+        position: relative;
+        padding: 17px 18px 17px 54px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .overview-map li::before {
+        position: absolute;
+        top: 16px;
+        left: 0;
+        display: grid;
+        width: 36px;
+        height: 36px;
+        place-items: center;
+        color: var(--accent-dark);
+        border-radius: 50%;
+        background: var(--accent-soft);
+        content: attr(data-mark);
+        font-size: 0.82rem;
+        font-weight: 900;
+      }
+
+      .overview-map b {
+        display: block;
+        margin-bottom: 3px;
+      }
+
+      .overview-map span {
+        color: var(--muted);
+        font-size: 0.88rem;
+      }
+
+      .handoff-card {
+        display: flex;
+        min-height: 100%;
+        padding: 34px;
+        flex-direction: column;
+        justify-content: space-between;
+        color: #f7f4eb;
+        border-radius: var(--radius);
+        background: var(--accent);
+      }
+
+      .handoff-card h3 {
+        max-width: 12ch;
+        font-size: 2rem;
+        line-height: 1.05;
+        letter-spacing: -0.04em;
+      }
+
+      .handoff-card p {
+        color: rgba(255, 255, 255, 0.8);
+      }
+
+      .handoff-card .big-number {
+        font-size: clamp(5rem, 10vw, 8rem);
+        font-weight: 900;
+        line-height: 0.8;
+        letter-spacing: -0.08em;
+      }
+
+      .workflow {
+        display: grid;
+        gap: 92px;
+      }
+
+      .step {
+        display: grid;
+        grid-template-columns: 0.72fr 1.28fr;
+        gap: 54px;
+        align-items: start;
+      }
+
+      .step.reverse {
+        grid-template-columns: 1.28fr 0.72fr;
+      }
+
+      .step.reverse .step-copy {
+        order: 2;
+      }
+
+      .step-index {
+        display: inline-grid;
+        min-width: 42px;
+        height: 32px;
+        margin-bottom: 18px;
+        padding-inline: 10px;
+        place-items: center;
+        color: var(--accent-dark);
+        border: 1px solid rgba(8, 127, 120, 0.28);
+        border-radius: 10px;
+        background: var(--accent-soft);
+        font-size: 0.78rem;
+        font-weight: 900;
+      }
+
+      .plain-list {
+        display: grid;
+        gap: 12px;
+        margin: 24px 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .plain-list li {
+        position: relative;
+        padding-left: 28px;
+        color: var(--muted);
+      }
+
+      .plain-list li::before {
+        position: absolute;
+        top: 0.58em;
+        left: 0;
+        width: 12px;
+        height: 2px;
+        background: var(--accent);
+        content: "";
+      }
+
+      .plain-list strong {
+        color: var(--ink);
+      }
+
+      .prompt-card {
+        position: relative;
+        margin-top: 26px;
+        padding: 22px 56px 22px 22px;
+        color: #eaf6f3;
+        border-radius: 16px;
+        background: #20413b;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 0.86rem;
+        line-height: 1.65;
+      }
+
+      .copy-prompt {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        width: 44px;
+        height: 34px;
+        padding: 0;
+        color: #eaf6f3;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.08);
+        cursor: pointer;
+      }
+
+      .copy-prompt:hover {
+        background: rgba(255, 255, 255, 0.17);
+      }
+
+      .media-frame {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .media-frame img {
+        width: 100%;
+        aspect-ratio: 1.55;
+        object-fit: cover;
+      }
+
+      .media-frame figcaption {
+        padding: 16px 18px;
+        color: var(--muted);
+        font-size: 0.68rem;
+        font-weight: 800;
+      }
+
+      .media-frame strong {
+        color: var(--ink);
+      }
+
+      .beat-map {
+        padding: 30px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .beat-track {
+        display: grid;
+        grid-template-columns: 1.1fr 0.9fr 1fr 1.15fr 0.85fr 1fr;
+        gap: 7px;
+        margin-bottom: 22px;
+      }
+
+      .beat-track span {
+        display: grid;
+        min-height: 88px;
+        padding: 10px;
+        align-content: end;
+        color: var(--ink);
+        border-radius: 12px;
+        background: var(--accent-soft);
+        font-size: 0.78rem;
+        font-weight: 800;
+      }
+
+      .beat-track span:nth-child(2n) {
+        background: #eed5b8;
+      }
+
+      .beat-track span:nth-child(3) {
+        background: #cadbd8;
+      }
+
+      .beat-track span:nth-child(5) {
+        color: #f7f4eb;
+        background: var(--accent);
+      }
+
+      .beat-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 18px;
+        color: var(--muted);
+        font-size: 0.84rem;
+      }
+
+      .artifact-pair {
+        display: grid;
+        grid-template-columns: 0.9fr 1.1fr;
+        gap: 20px;
+      }
+
+      .asset-sheet,
+      .sprite-sheet {
+        padding: 28px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .asset-sheet h3,
+      .sprite-sheet h3,
+      .voice-panel h3,
+      .deliverable h3 {
+        margin-bottom: 8px;
+        font-size: 1.25rem;
+      }
+
+      .asset-sheet > p,
+      .sprite-sheet > p,
+      .voice-panel > p,
+      .deliverable > p {
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      .asset-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 22px;
+      }
+
+      .asset-chip {
+        min-height: 92px;
+        padding: 14px;
+        border: 1px dashed rgba(23, 49, 45, 0.28);
+        border-radius: 14px;
+        background: #f6f1e4;
+      }
+
+      .asset-chip b,
+      .sprite-cell b {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 0.86rem;
+      }
+
+      .asset-chip small,
+      .sprite-cell small {
+        color: var(--muted);
+      }
+
+      .asset-chip.subject {
+        border-style: solid;
+        background: var(--accent-soft);
+      }
+
+      .sprite-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 6px;
+        margin-top: 22px;
+        padding: 9px;
+        border-radius: 14px;
+        background: #203c37;
+      }
+
+      .sprite-cell {
+        display: grid;
+        min-height: 80px;
+        padding: 9px;
+        align-content: end;
+        color: var(--ink);
+        border-radius: 9px;
+        background: #f7f2e5;
+      }
+
+      .sprite-cell:nth-child(3n) {
+        background: #d3ebe6;
+      }
+
+      .sprite-cell:nth-child(5) {
+        background: #efc46c;
+      }
+
+      .sprite-cell:nth-child(6) {
+        background: #dfb08e;
+      }
+
+      .pipeline-line {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 18px;
+      }
+
+      .pipeline-line div {
+        position: relative;
+        min-height: 92px;
+        padding: 14px 12px;
+        border-radius: 14px;
+        background: var(--accent-soft);
+        font-size: 0.78rem;
+      }
+
+      .pipeline-line div:not(:last-child)::after {
+        position: absolute;
+        top: 50%;
+        right: -9px;
+        z-index: 2;
+        color: var(--accent-dark);
+        content: ">";
+        font-weight: 900;
+      }
+
+      .pipeline-line b {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--accent-dark);
+      }
+
+      .voice-panel {
+        padding: 30px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .waveform {
+        display: flex;
+        height: 128px;
+        margin: 28px 0 16px;
+        align-items: center;
+        gap: 5px;
+        overflow: hidden;
+      }
+
+      .waveform span {
+        width: 6px;
+        height: var(--h);
+        border-radius: 8px;
+        background: var(--accent);
+        opacity: 0.72;
+        transform-origin: center;
+      }
+
+      .voice-meta {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .voice-meta div {
+        padding: 14px;
+        border-radius: 12px;
+        background: #f3eee1;
+      }
+
+      .voice-meta b {
+        display: block;
+        font-size: 0.82rem;
+      }
+
+      .voice-meta span {
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+
+      .gallery-shell {
+        position: relative;
+        padding: 22px;
+        border-radius: var(--radius);
+        background: var(--ink);
+        box-shadow: var(--shadow);
+      }
+
+      .gallery-shell img {
+        width: 100%;
+        border-radius: 13px;
+      }
+
+      .gallery-caption {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        padding-top: 18px;
+        color: rgba(255, 255, 255, 0.72);
+        font-size: 0.82rem;
+      }
+
+      .gallery-caption b {
+        display: block;
+        color: #8ed7cf;
+      }
+
+      .artifact-flow {
+        padding: 74px 0;
+        background: var(--paper-deep);
+      }
+
+      .file-map {
+        display: grid;
+        grid-template-columns: 0.75fr 1.25fr;
+        gap: 34px;
+        align-items: stretch;
+      }
+
+      .file-explainer {
+        padding: 34px;
+        color: #f7f4eb;
+        border-radius: var(--radius);
+        background: var(--ink);
+      }
+
+      .file-explainer h2 {
+        margin-bottom: 14px;
+        font-size: 2.3rem;
+        line-height: 1.05;
+        letter-spacing: -0.05em;
+      }
+
+      .file-explainer p {
+        color: rgba(255, 255, 255, 0.68);
+      }
+
+      .file-tree {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        padding: 28px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+      }
+
+      .file-item {
+        min-height: 94px;
+        padding: 16px;
+        border-left: 4px solid var(--accent);
+        border-radius: 0 12px 12px 0;
+        background: #f3eee1;
+      }
+
+      .file-item code {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--accent-dark);
+        font-size: 0.82rem;
+        font-weight: 800;
+      }
+
+      .file-item span {
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+
+      .render-layout {
+        display: grid;
+        grid-template-columns: 1.18fr 0.82fr;
+        gap: 26px;
+        align-items: start;
+      }
+
+      .render-layout .media-frame img {
+        aspect-ratio: 1.55;
+        object-position: 50% 35%;
+      }
+
+      .deliverables {
+        display: grid;
+        gap: 12px;
+      }
+
+      .deliverable {
+        padding: 22px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: var(--surface);
+      }
+
+      .deliverable.ready {
+        border-color: rgba(8, 127, 120, 0.35);
+        background: var(--accent-soft);
+      }
+
+      .checklist {
+        display: grid;
+        grid-template-columns: 1.05fr 0.95fr;
+        gap: 30px;
+        align-items: start;
+      }
+
+      .checklist-board {
+        padding: 36px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .checklist-board h2 {
+        font-size: clamp(2.4rem, 4vw, 4rem);
+        line-height: 1;
+        letter-spacing: -0.055em;
+      }
+
+      .checks {
+        display: grid;
+        gap: 10px;
+        margin: 26px 0 0;
+      }
+
+      .check {
+        display: grid;
+        grid-template-columns: 26px 1fr;
+        gap: 12px;
+        padding: 12px 0;
+        align-items: start;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .check:last-child {
+        border-bottom: 0;
+      }
+
+      .check-mark {
+        display: grid;
+        width: 24px;
+        height: 24px;
+        place-items: center;
+        color: #f7f4eb;
+        border-radius: 8px;
+        background: var(--accent);
+        font-size: 0.8rem;
+        font-weight: 900;
+      }
+
+      .check small {
+        display: block;
+        margin-top: 3px;
+        color: var(--muted);
+      }
+
+      .finish-card {
+        position: sticky;
+        top: 100px;
+        padding: 34px;
+        color: #f7f4eb;
+        border-radius: var(--radius);
+        background: var(--accent);
+        box-shadow: var(--shadow);
+      }
+
+      .finish-card h3 {
+        margin-bottom: 16px;
+        font-size: 2rem;
+        line-height: 1.08;
+        letter-spacing: -0.04em;
+      }
+
+      .finish-card p {
+        color: rgba(255, 255, 255, 0.78);
+      }
+
+      .finish-card .button {
+        width: 100%;
+        color: var(--ink);
+        border-color: #f7f4eb;
+        background: #f7f4eb;
+      }
+
+      .footer {
+        padding-block: 46px;
+        color: rgba(255, 255, 255, 0.7);
+        background: var(--ink);
+      }
+
+      .footer-inner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 28px;
+      }
+
+      .footer b {
+        color: #f7f4eb;
+      }
+
+      .footer-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 18px;
+      }
+
+      .footer-links a {
+        color: #9eddd6;
+      }
+
+      .toast {
+        position: fixed;
+        right: 20px;
+        bottom: 20px;
+        z-index: 30;
+        padding: 13px 16px;
+        color: #f7f4eb;
+        border-radius: 12px;
+        background: var(--ink);
+        box-shadow: var(--shadow);
+        opacity: 0;
+        transform: translateY(10px);
+        transition: opacity 180ms ease, transform 180ms ease;
+        pointer-events: none;
+      }
+
+      .toast.show {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      @media (prefers-reduced-motion: no-preference) {
+        .reveal {
+          animation: reveal both ease-out;
+          animation-timeline: view();
+          animation-range: entry 8% cover 28%;
+        }
+
+        @keyframes reveal {
+          from {
+            opacity: 0;
+            transform: translateY(24px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        .waveform span {
+          animation: breathe 1.8s ease-in-out infinite alternate;
+          animation-delay: calc(var(--i) * 35ms);
+        }
+
+        @keyframes breathe {
+          to {
+            transform: scaleY(0.72);
+            opacity: 0.58;
+          }
+        }
+      }
+
+      @media (max-width: 980px) {
+        .topnav {
+          display: none;
+        }
+
+        .hero,
+        .step,
+        .step.reverse,
+        .overview-grid,
+        .file-map,
+        .render-layout,
+        .checklist {
+          grid-template-columns: 1fr;
+        }
+
+        .hero {
+          min-height: auto;
+          padding-block: 50px 72px;
+        }
+
+        .hero-visual {
+          min-height: 450px;
+        }
+
+        .roles {
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .role-intro {
+          grid-column: 1 / -1;
+        }
+
+        .step.reverse .step-copy {
+          order: 0;
+        }
+
+        .artifact-pair {
+          grid-template-columns: 1fr;
+        }
+
+        .finish-card {
+          position: static;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .wrap {
+          width: min(calc(100% - 28px), var(--max));
+        }
+
+        .topbar-inner {
+          min-height: 64px;
+        }
+
+        .top-action {
+          min-height: 40px;
+          padding-inline: 13px;
+          font-size: 0.82rem;
+        }
+
+        h1 {
+          font-size: clamp(2.75rem, 14vw, 4.5rem);
+        }
+
+        .hero-visual {
+          min-height: 330px;
+        }
+
+        .hero-frame {
+          inset: 8% 0 8% 0;
+        }
+
+        .paper-note {
+          max-width: 185px;
+          padding: 12px 14px;
+          font-size: 0.82rem;
+        }
+
+        .roles,
+        .overview-map ol,
+        .file-tree,
+        .voice-meta,
+        .gallery-caption {
+          grid-template-columns: 1fr;
+        }
+
+        .section {
+          padding-block: 76px;
+        }
+
+        .section.compact {
+          padding-block: 58px;
+        }
+
+        .step {
+          gap: 28px;
+        }
+
+        .overview-map,
+        .asset-sheet,
+        .sprite-sheet,
+        .voice-panel,
+        .checklist-board {
+          padding: 24px;
+        }
+
+        .beat-track {
+          grid-template-columns: repeat(3, 1fr);
+        }
+
+        .pipeline-line {
+          grid-template-columns: 1fr;
+        }
+
+        .pipeline-line div:not(:last-child)::after {
+          top: auto;
+          right: 50%;
+          bottom: -13px;
+          transform: rotate(90deg);
+        }
+
+        .sprite-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .footer-inner {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="wrap topbar-inner">
+        <a class="brand" href="#bat-dau" aria-label="Về đầu trang">
+          <span class="brand-mark">V</span>
+          <span>Codex x HyperFrames</span>
+        </a>
+        <nav class="topnav" aria-label="Mục lục">
+          <a href="#tong-quan">Tổng quan</a>
+          <a href="#kich-ban">Kịch bản</a>
+          <a href="#tai-nguyen">Tài nguyên</a>
+          <a href="#dung-canh">Dựng cảnh</a>
+          <a href="#xuat-video">Xuất video</a>
+        </nav>
+        <a class="top-action" href="#checklist">Xem checklist</a>
+      </div>
+    </header>
+
+    <main>
+      <section class="wrap hero" id="bat-dau">
+        <div>
+          <span class="eyebrow">Hướng dẫn cho người mới</span>
+          <h1>Từ một ý tưởng đến video hoàn chỉnh</h1>
+          <p class="hero-lead">
+            Bạn quyết định câu chuyện. Codex chuẩn bị mọi phần. HyperFrames ghép chúng thành video có thể xem, sửa và xuất lại.
+          </p>
+          <div class="hero-actions">
+            <a class="button" href="#tong-quan">Bắt đầu quy trình</a>
+            <a class="button secondary" href="#vi-du-thuc-te">Xem ảnh thực tế</a>
+          </div>
+        </div>
+        <div class="hero-visual" aria-label="Giao diện dự án video VOX STYLE">
+          <figure class="hero-frame">
+            <img
+              src="assets/03-storyboard-workbench.webp"
+              alt="Giao diện storyboard, voiceover và tạo video của dự án VOX STYLE"
+              width="3024"
+              height="1544"
+            />
+          </figure>
+          <div class="paper-note top">Không cần biết code. Hãy mô tả điều bạn muốn nhìn thấy.</div>
+          <div class="paper-note bottom">Mỗi lần duyệt là một điểm có thể quay lại.</div>
+        </div>
+      </section>
+
+      <section class="role-strip" aria-label="Phân chia vai trò">
+        <div class="wrap roles">
+          <div class="role-intro">
+            <strong>Ba vai trò, một quy trình</strong>
+            <span>Hiểu đúng vai trò giúp bạn biết lúc nào cần ra quyết định.</span>
+          </div>
+          <div class="role">
+            <b>Bạn là đạo diễn</b>
+            <p>Chọn chủ đề, đối tượng xem, phong cách, duyệt lời thoại và nói rõ cảnh nào cần sửa.</p>
+          </div>
+          <div class="role">
+            <b>Codex là ê-kíp sản xuất</b>
+            <p>Viết tài liệu, sắp tài nguyên, dựng từng beat, kiểm tra lỗi và cập nhật đúng phần bạn yêu cầu.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section wrap" id="tong-quan">
+        <div class="section-heading reveal">
+          <h2>Bản đồ toàn bộ hành trình</h2>
+          <p>Mỗi chặng tạo ra một sản phẩm rõ ràng. Chỉ chuyển tiếp khi bạn đã duyệt sản phẩm của chặng trước.</p>
+        </div>
+        <div class="overview-grid reveal">
+          <div class="overview-map">
+            <ol>
+              <li data-mark="A"><b>Brief và mục tiêu</b><span>Video dành cho ai, dài bao lâu, muốn người xem hiểu gì.</span></li>
+              <li data-mark="B"><b>Kịch bản</b><span>Lời đọc hoàn chỉnh, không bịa dữ kiện.</span></li>
+              <li data-mark="C"><b>Beat map</b><span>Chia câu chuyện thành các đoạn ngắn có chức năng riêng.</span></li>
+              <li data-mark="D"><b>Asset sheet</b><span>Kiểm kê ảnh, logo, font, màu và vai trò từng tài nguyên.</span></li>
+              <li data-mark="E"><b>Sprite sheet</b><span>Chuẩn bị trạng thái chuyển động của các phần tử cần hoạt hình.</span></li>
+              <li data-mark="F"><b>Voiceover</b><span>Tạo giọng đọc và thời gian chính xác cho từng từ.</span></li>
+              <li data-mark="G"><b>Visual và scene</b><span>Codex dựng một file HTML cho mỗi beat.</span></li>
+              <li data-mark="H"><b>Kiểm tra và xuất</b><span>Xem snapshot, sửa lỗi, render MP4 và bàn giao.</span></li>
+            </ol>
+          </div>
+          <aside class="handoff-card">
+            <div>
+              <h3>Quy tắc dễ nhớ nhất</h3>
+              <p>Không dựng hết video trong một lần. Duyệt lần lượt lời, nhịp, hình, chuyển động rồi mới render.</p>
+            </div>
+            <div class="big-number">8</div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section compact wrap">
+        <div class="workflow">
+          <article class="step reveal" id="brief">
+            <div class="step-copy">
+              <span class="step-index">BRIEF</span>
+              <h2>Chốt điều video phải làm</h2>
+              <p>Đây là lúc bạn trả lời những câu hỏi đời thường. Chưa cần nghĩ đến hiệu ứng hay kỹ thuật.</p>
+              <ul class="plain-list">
+                <li><strong>Tiêu đề:</strong> nói thẳng video giải thích chuyện gì.</li>
+                <li><strong>Người xem:</strong> ai cần hiểu câu chuyện này.</li>
+                <li><strong>Kết quả:</strong> xem xong họ nhớ hoặc làm điều gì.</li>
+                <li><strong>Khung hình:</strong> 9:16 cho TikTok, Reels; 16:9 cho YouTube.</li>
+                <li><strong>Ảnh tham chiếu:</strong> chủ thể, màu sắc, phong cách và logo.</li>
+              </ul>
+              <div class="prompt-card">
+                <button class="copy-prompt" type="button" aria-label="Sao chép prompt">Chép</button>
+                Tôi muốn làm video [30 giây] về [chủ đề], dành cho [người xem]. Sau video, họ cần hiểu [kết quả]. Hãy giúp tôi viết brief ngắn và hỏi lại nếu thiếu dữ kiện.
+              </div>
+            </div>
+            <figure class="media-frame">
+              <img
+                src="assets/01-brief-setup.webp"
+                alt="Màn hình cấu hình tiêu đề, ngôn ngữ, tỷ lệ và các khóa nhất quán"
+                loading="lazy"
+                width="3024"
+                height="1544"
+              />
+              <figcaption><strong>Đúng vị trí:</strong> ảnh cấu hình nằm ở chặng brief vì đây là nơi khóa format và quy tắc nhất quán.</figcaption>
+            </figure>
+          </article>
+
+          <article class="step reverse reveal" id="kich-ban">
+            <div class="step-copy">
+              <span class="step-index">SCRIPT</span>
+              <h2>Viết lời đọc trước khi làm hình</h2>
+              <p>Kịch bản là xương sống. Hình ảnh chỉ có nhiệm vụ giúp người xem hiểu câu đang được đọc.</p>
+              <ul class="plain-list">
+                <li><strong>Mở nhanh:</strong> đưa câu hỏi hoặc điều bất ngờ vào những giây đầu.</li>
+                <li><strong>Mỗi câu một ý:</strong> tránh nhồi nhiều thông tin vào cùng một nhịp.</li>
+                <li><strong>Dữ kiện có nguồn:</strong> đánh dấu mọi con số chưa xác minh.</li>
+                <li><strong>Đọc thành tiếng:</strong> câu nào khó thở thì cần rút ngắn.</li>
+              </ul>
+              <div class="prompt-card">
+                <button class="copy-prompt" type="button" aria-label="Sao chép prompt">Chép</button>
+                Viết kịch bản tiếng Việt tự nhiên cho brief này. Không bịa số liệu. Mỗi câu chỉ có một ý. Tổng độ dài phù hợp [30 giây]. Đánh dấu [CẦN NGUỒN] ở chi tiết chưa chắc chắn.
+              </div>
+            </div>
+            <figure class="media-frame">
+              <img
+                src="assets/02-script-beats.webp"
+                alt="Màn hình kịch bản được chia thành các beat có lời đọc và thời gian"
+                loading="lazy"
+                width="3024"
+                height="1544"
+              />
+              <figcaption><strong>Điểm duyệt:</strong> sửa lời thoại ngay tại đây để không tốn thời gian dựng lại hình và chuyển động.</figcaption>
+            </figure>
+          </article>
+
+          <article class="step reveal" id="beat-map">
+            <div class="step-copy">
+              <span class="step-index">BEAT MAP</span>
+              <h2>Biến kịch bản thành nhịp hình</h2>
+              <p>Một beat là một đoạn ngắn có một việc duy nhất. Ví dụ: giới thiệu vấn đề, giải thích cơ chế, đưa bằng chứng hoặc chốt kết luận.</p>
+              <ul class="plain-list">
+                <li><strong>Job:</strong> beat này phải giúp người xem hiểu gì.</li>
+                <li><strong>Narration:</strong> câu nào được đọc trong beat.</li>
+                <li><strong>Visual:</strong> chủ thể chính, nền và cơ chế trực quan.</li>
+                <li><strong>Transition:</strong> phần tử nào dẫn sang beat sau.</li>
+                <li><strong>Thời lượng:</strong> lấy từ giọng đọc, không ước lượng bằng mắt.</li>
+              </ul>
+            </div>
+            <div class="beat-map" aria-label="Ví dụ beat map sáu nhịp">
+              <div class="beat-track">
+                <span>Hook<br />0-3 giây</span>
+                <span>Bối cảnh<br />3-7 giây</span>
+                <span>Cơ chế<br />7-13 giây</span>
+                <span>Hành trình<br />13-20 giây</span>
+                <span>Điểm chính<br />20-26 giây</span>
+                <span>Kết<br />26-30 giây</span>
+              </div>
+              <div class="beat-legend">
+                <span>Mỗi khối là một scene</span>
+                <span>Độ rộng phản ánh thời lượng</span>
+                <span>Màu đổi theo chức năng kể chuyện</span>
+              </div>
+            </div>
+          </article>
+
+          <article class="step reverse reveal" id="tai-nguyen">
+            <div class="step-copy">
+              <span class="step-index">ASSET SHEET</span>
+              <h2>Kiểm kê hình trước khi dựng</h2>
+              <p>Asset sheet là bảng nguyên liệu. Mỗi ảnh phải có tên dễ hiểu, vai trò rõ và ghi chú cách được phép sử dụng.</p>
+              <ul class="plain-list">
+                <li><strong>Subject:</strong> người, sản phẩm hoặc vật thể phải giữ đúng nhận diện.</li>
+                <li><strong>Environment:</strong> bối cảnh và bố cục tham khảo.</li>
+                <li><strong>Style:</strong> chỉ lấy chất liệu, màu, ánh sáng, không sao chép nội dung.</li>
+                <li><strong>Overlay:</strong> logo, icon, texture hoặc nhãn được đặt sau cùng.</li>
+              </ul>
+            </div>
+            <div class="artifact-pair">
+              <div class="asset-sheet">
+                <h3>Asset sheet</h3>
+                <p>Danh mục để Codex biết ảnh nào dùng ở đâu.</p>
+                <div class="asset-grid">
+                  <div class="asset-chip subject"><b>container.png</b><small>Subject, giữ hình dáng</small></div>
+                  <div class="asset-chip"><b>port.jpg</b><small>Environment, tham khảo bố cục</small></div>
+                  <div class="asset-chip"><b>paper-style.png</b><small>Style, chỉ lấy chất liệu</small></div>
+                  <div class="asset-chip"><b>brand-mark.svg</b><small>Overlay, đặt bằng HTML</small></div>
+                </div>
+              </div>
+              <div class="sprite-sheet">
+                <h3>Sprite sheet</h3>
+                <p>Một tấm chứa nhiều trạng thái của cùng phần tử.</p>
+                <div class="sprite-grid" aria-label="Minh họa sprite sheet tám trạng thái">
+                  <div class="sprite-cell"><b>Đóng</b><small>khung 1</small></div>
+                  <div class="sprite-cell"><b>Mở 1/3</b><small>khung 2</small></div>
+                  <div class="sprite-cell"><b>Mở 2/3</b><small>khung 3</small></div>
+                  <div class="sprite-cell"><b>Mở hết</b><small>khung 4</small></div>
+                  <div class="sprite-cell"><b>Nâng lên</b><small>khung 5</small></div>
+                  <div class="sprite-cell"><b>Trượt đi</b><small>khung 6</small></div>
+                  <div class="sprite-cell"><b>Dừng</b><small>khung 7</small></div>
+                  <div class="sprite-cell"><b>Kết</b><small>khung 8</small></div>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <article class="step reveal" id="sprite-pipeline">
+            <div class="step-copy">
+              <span class="step-index">SPRITE PIPELINE</span>
+              <h2>Khi nào cần sprite sheet</h2>
+              <p>Dùng sprite sheet khi một vật thể cần thay đổi hình dạng theo từng nấc rõ ràng, như tay gắp, hộp mở, nhân vật quay đầu hoặc biểu đồ tăng dần.</p>
+              <ul class="plain-list">
+                <li>Không cần sprite cho chuyển động đơn giản như trượt, phóng to hoặc mờ dần.</li>
+                <li>Mọi ô phải cùng kích thước, cùng góc nhìn và nền trong suốt.</li>
+                <li>Đặt tên trạng thái theo hành động, không đặt tên chung như ảnh 1, ảnh 2.</li>
+                <li>Codex ánh xạ từng ô vào timeline; HyperFrames hiển thị đúng ô tại đúng thời điểm.</li>
+              </ul>
+            </div>
+            <div class="sprite-sheet">
+              <h3>Luồng chuẩn bị sprite</h3>
+              <p>Người dùng chỉ cần duyệt hình đầu, hình cuối và nhịp chuyển.</p>
+              <div class="pipeline-line">
+                <div><b>Ảnh gốc</b>Chọn chủ thể rõ, không bị che.</div>
+                <div><b>Tách nền</b>Giữ viền sạch và bóng nhất quán.</div>
+                <div><b>Tạo trạng thái</b>Mỗi thay đổi là một pose riêng.</div>
+                <div><b>Ghép sheet</b>Xếp ô theo thứ tự trái sang phải.</div>
+                <div><b>Gắn timeline</b>Codex đặt trạng thái vào scene.</div>
+              </div>
+              <div class="prompt-card">
+                <button class="copy-prompt" type="button" aria-label="Sao chép prompt">Chép</button>
+                Từ asset [tên file], tạo kế hoạch sprite sheet cho hành động [mô tả]. Giữ nguyên nhận diện và góc nhìn. Liệt kê từng trạng thái cần có, kích thước lưới và thời điểm xuất hiện trong beat.
+              </div>
+            </div>
+          </article>
+
+          <article class="step reverse reveal" id="voiceover">
+            <div class="step-copy">
+              <span class="step-index">VOICEOVER</span>
+              <h2>Lấy giọng đọc làm đồng hồ</h2>
+              <p>Sau khi duyệt lời, hệ thống tạo file âm thanh và transcript có thời gian từng từ. Từ đây beat sẽ bám đúng giọng, không còn cảnh quá dài hoặc hết cảnh khi câu chưa đọc xong.</p>
+              <ul class="plain-list">
+                <li><strong>Duyệt phát âm:</strong> tên riêng, chữ viết tắt và số liệu.</li>
+                <li><strong>Duyệt nhịp:</strong> chỗ cần nghỉ, nhấn và tăng tốc.</li>
+                <li><strong>Khóa lời:</strong> sửa câu sau bước này sẽ làm thay đổi timing.</li>
+                <li><strong>Xuất transcript:</strong> dùng cho phụ đề và đồng bộ animation.</li>
+              </ul>
+            </div>
+            <div class="voice-panel">
+              <h3>Giọng đọc đã khóa</h3>
+              <p>Ví dụ một câu dài 4,8 giây được chia theo mốc từ.</p>
+              <div class="waveform" aria-label="Minh họa sóng âm">
+                <span style="--h:30%;--i:1"></span><span style="--h:52%;--i:2"></span><span style="--h:78%;--i:3"></span><span style="--h:46%;--i:4"></span><span style="--h:88%;--i:5"></span><span style="--h:68%;--i:6"></span><span style="--h:42%;--i:7"></span><span style="--h:73%;--i:8"></span><span style="--h:96%;--i:9"></span><span style="--h:54%;--i:10"></span><span style="--h:82%;--i:11"></span><span style="--h:36%;--i:12"></span><span style="--h:64%;--i:13"></span><span style="--h:90%;--i:14"></span><span style="--h:48%;--i:15"></span><span style="--h:74%;--i:16"></span><span style="--h:58%;--i:17"></span><span style="--h:32%;--i:18"></span><span style="--h:66%;--i:19"></span><span style="--h:44%;--i:20"></span><span style="--h:80%;--i:21"></span><span style="--h:52%;--i:22"></span><span style="--h:36%;--i:23"></span><span style="--h:62%;--i:24"></span>
+              </div>
+              <div class="voice-meta">
+                <div><b>narration.wav</b><span>Giọng đọc master</span></div>
+                <div><b>narration.txt</b><span>Lời đã duyệt</span></div>
+                <div><b>transcript.json</b><span>Timing từng từ</span></div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="artifact-flow" id="artifact-flow">
+        <div class="wrap file-map reveal">
+          <div class="file-explainer">
+            <h2>Mỗi quyết định đều có nơi lưu</h2>
+            <p>Bạn không cần mở các file này. Điểm quan trọng là Codex có thể quay lại đúng chặng, sửa một beat mà không làm lại toàn bộ video.</p>
+          </div>
+          <div class="file-tree">
+            <div class="file-item"><code>DESIGN.md</code><span>Màu, font, logo và quy tắc hình ảnh.</span></div>
+            <div class="file-item"><code>SCRIPT.md</code><span>Toàn bộ lời đọc đã duyệt.</span></div>
+            <div class="file-item"><code>STORYBOARD.md</code><span>Beat map, asset, motion và chuyển cảnh.</span></div>
+            <div class="file-item"><code>transcript.json</code><span>Thời gian từng từ của voiceover.</span></div>
+            <div class="file-item"><code>compositions/</code><span>Một file HTML độc lập cho mỗi beat.</span></div>
+            <div class="file-item"><code>snapshots/</code><span>Ảnh kiểm tra tại các thời điểm quan trọng.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section wrap" id="dung-canh">
+        <div class="section-heading reveal">
+          <h2>Dựng visual thành scene</h2>
+          <p>Codex lấy storyboard, asset sheet, sprite sheet và timing để dựng từng beat. HyperFrames biến các file HTML đó thành một timeline có thể tua và render chính xác.</p>
+        </div>
+        <div class="workflow">
+          <article class="step reveal" id="vi-du-thuc-te">
+            <div class="step-copy">
+              <span class="step-index">VISUAL</span>
+              <h2>Mỗi scene phải rõ trong một cái nhìn</h2>
+              <p>Scene tốt có một chủ thể chính, một hành động chính và khoảng trống đủ cho chữ. Các cảnh kế tiếp thay đổi bố cục nhưng vẫn giữ cùng chất liệu.</p>
+              <ul class="plain-list">
+                <li>Keyframe ảnh được duyệt trước khi thêm chuyển động.</li>
+                <li>Ảnh chụp thật có thể làm background hoặc cutout.</li>
+                <li>Chữ, logo và nhãn được đặt bằng HTML để luôn sắc nét.</li>
+                <li>Chỉ một camera move chính trong mỗi beat.</li>
+                <li>Sprite được dùng khi hình dạng thay đổi theo nhiều trạng thái.</li>
+              </ul>
+              <div class="prompt-card">
+                <button class="copy-prompt" type="button" aria-label="Sao chép prompt">Chép</button>
+                Dựng beat [tên beat] theo STORYBOARD.md. Dùng đúng asset đã ghi. Giữ chủ thể dễ đọc, chừa vùng chữ phía trên, chỉ dùng một camera move và tự kiểm tra ảnh snapshot ở giữa beat.
+              </div>
+            </div>
+            <div class="gallery-shell">
+              <img
+                src="assets/04-scene-gallery.webp"
+                alt="Ba scene paper collage về đóng gói, vận chuyển và cảng biển"
+                loading="lazy"
+                width="3024"
+                height="1544"
+              />
+              <div class="gallery-caption">
+                <span><b>Đóng gói</b>Close crop, hành động rõ.</span>
+                <span><b>Vận chuyển</b>Wide shot, nhịp ngang.</span>
+                <span><b>Cảng biển</b>Hệ thống nhiều lớp.</span>
+              </div>
+            </div>
+          </article>
+
+          <article class="step reverse reveal">
+            <div class="step-copy">
+              <span class="step-index">HTML COMPOSITION</span>
+              <h2>HyperFrames ghép gì vào timeline</h2>
+              <p>Hãy hình dung mỗi scene là một sân khấu. HTML đặt vật thể lên sân khấu; thời gian quy định lúc xuất hiện; animation quy định cách di chuyển.</p>
+              <ul class="plain-list">
+                <li><strong>Ảnh:</strong> keyframe, cutout, texture và overlay.</li>
+                <li><strong>Video:</strong> clip tạo sẵn hoặc cảnh quay phụ.</li>
+                <li><strong>Audio:</strong> voiceover, nhạc và hiệu ứng âm thanh.</li>
+                <li><strong>Composition:</strong> nhóm nhiều phần tử thành một beat có thể tái sử dụng.</li>
+                <li><strong>Timeline:</strong> giữ mọi thứ chạy đúng thời gian ở từng frame.</li>
+              </ul>
+            </div>
+            <figure class="media-frame">
+              <img
+                src="assets/03-storyboard-workbench.webp"
+                alt="Khu vực storyboard, voiceover và tạo video được tổ chức thành các tab"
+                loading="lazy"
+                width="3024"
+                height="1544"
+              />
+              <figcaption><strong>Cách làm dễ sửa:</strong> giữ storyboard, voice và video thành các lớp riêng trước khi ghép bản cuối.</figcaption>
+            </figure>
+          </article>
+        </div>
+      </section>
+
+      <section class="section compact wrap" id="xuat-video">
+        <div class="section-heading reveal">
+          <h2>Xem thử, kiểm tra, rồi mới render</h2>
+          <p>Không cần render toàn bộ sau mỗi thay đổi. Codex chụp snapshot ở giữa từng beat để phát hiện lỗi bố cục trước.</p>
+        </div>
+        <div class="render-layout reveal">
+          <figure class="media-frame">
+            <img
+              src="assets/05-render-preview.webp"
+              alt="Màn hình xem thử và render video hoàn chỉnh"
+              loading="lazy"
+              width="3024"
+              height="1544"
+            />
+            <figcaption><strong>Bước cuối:</strong> xem bản preview, kiểm tra phụ đề và chỉ bấm render khi mọi beat đã được duyệt.</figcaption>
+          </figure>
+          <div class="deliverables">
+            <div class="deliverable">
+              <h3>1. Snapshot</h3>
+              <p>Ảnh chụp ở các mốc quan trọng để kiểm tra chữ, crop, vị trí và asset bị thiếu.</p>
+            </div>
+            <div class="deliverable">
+              <h3>2. Lint và validate</h3>
+              <p>HyperFrames kiểm tra cấu trúc HTML, timing, file thất lạc và lỗi chạy scene.</p>
+            </div>
+            <div class="deliverable">
+              <h3>3. Preview</h3>
+              <p>Bạn tua toàn bộ video trong trình duyệt và yêu cầu sửa đúng beat chưa ổn.</p>
+            </div>
+            <div class="deliverable ready">
+              <h3>4. MP4 hoàn chỉnh</h3>
+              <p>Khi đã duyệt, HyperFrames chụp từng frame và ghép âm thanh để xuất file ổn định.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section wrap" id="checklist">
+        <div class="checklist reveal">
+          <div class="checklist-board">
+            <h2>Checklist duyệt video</h2>
+            <p>Chỉ cần trả lời có hoặc chưa cho từng mục.</p>
+            <div class="checks">
+              <div class="check"><span class="check-mark">✓</span><div><b>Lời đọc đúng và dễ hiểu</b><small>Không có dữ kiện chưa xác minh hoặc câu quá dài.</small></div></div>
+              <div class="check"><span class="check-mark">✓</span><div><b>Mỗi beat chỉ làm một việc</b><small>Người xem hiểu được điểm chính trong một cái nhìn.</small></div></div>
+              <div class="check"><span class="check-mark">✓</span><div><b>Asset dùng đúng vai trò</b><small>Subject giữ nhận diện, style chỉ hướng dẫn chất liệu.</small></div></div>
+              <div class="check"><span class="check-mark">✓</span><div><b>Sprite chuyển động mượt</b><small>Không nhảy pose, không đổi góc nhìn và không lẹm viền.</small></div></div>
+              <div class="check"><span class="check-mark">✓</span><div><b>Voice khớp thời gian</b><small>Cảnh bắt đầu, nhấn và kết thúc theo đúng câu đọc.</small></div></div>
+              <div class="check"><span class="check-mark">✓</span><div><b>Chữ và logo luôn sắc nét</b><small>Không dùng hình AI để sinh chữ quan trọng.</small></div></div>
+              <div class="check"><span class="check-mark">✓</span><div><b>Snapshot không có lỗi</b><small>Không crop mặt, tràn chữ, chồng lớp hoặc mất asset.</small></div></div>
+              <div class="check"><span class="check-mark">✓</span><div><b>Preview nghe và xem ổn</b><small>Âm lượng đều, chuyển cảnh có lý do và CTA đủ lâu để đọc.</small></div></div>
+            </div>
+          </div>
+          <aside class="finish-card">
+            <h3>Một câu lệnh tốt để bắt đầu</h3>
+            <p>Hãy cung cấp chủ đề, thời lượng, tỷ lệ, người xem và cảm giác mong muốn. Codex sẽ đưa bạn qua từng điểm duyệt.</p>
+            <div class="prompt-card">
+              <button class="copy-prompt" type="button" aria-label="Sao chép prompt">Chép</button>
+              Hãy tạo video [30 giây, 9:16] về [chủ đề] bằng Codex và HyperFrames. Dành cho [người xem], phong cách [mô tả]. Làm theo từng chặng brief, script, beat map, asset sheet, sprite sheet nếu cần, voiceover, visual, scene, snapshot và render. Dừng để tôi duyệt sau mỗi chặng.
+            </div>
+            <a class="button" href="#bat-dau">Về đầu trang</a>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="wrap footer-inner">
+        <div>
+          <b>Codex x HyperFrames</b><br />
+          Quy trình dễ hiểu, có checkpoint, có thể sửa từng beat.
+        </div>
+        <div class="footer-links">
+          <a href="https://hyperframes.heygen.com/guides/pipeline" target="_blank" rel="noreferrer">Pipeline chính thức</a>
+          <a href="https://hyperframes.heygen.com/concepts/compositions" target="_blank" rel="noreferrer">HTML compositions</a>
+          <a href="https://hyperframes.heygen.com/quickstart" target="_blank" rel="noreferrer">Quickstart</a>
+        </div>
+      </div>
+    </footer>
+
+    <div class="toast" role="status" aria-live="polite">Đã sao chép prompt</div>
+
+    <script>
+      const toast = document.querySelector(".toast");
+      let toastTimer;
+
+      document.querySelectorAll(".copy-prompt").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const card = button.closest(".prompt-card");
+          const promptCopy = card.cloneNode(true);
+          promptCopy.querySelector("button")?.remove();
+          const text = promptCopy.textContent.trim();
+          try {
+            await navigator.clipboard.writeText(text);
+            toast.classList.add("show");
+            window.clearTimeout(toastTimer);
+            toastTimer = window.setTimeout(() => toast.classList.remove("show"), 1800);
+          } catch {
+            button.textContent = "Chọn";
+          }
+        });
+      });
+
+      const navLinks = Array.from(document.querySelectorAll(".topnav a"));
+      const navTargets = navLinks
+        .map((link) => document.querySelector(link.getAttribute("href")))
+        .filter(Boolean);
+
+      const navObserver = new IntersectionObserver(
+        (entries) => {
+          const visible = entries.find((entry) => entry.isIntersecting);
+          if (!visible) return;
+          navLinks.forEach((link) => {
+            link.classList.toggle("active", link.getAttribute("href") === `#${visible.target.id}`);
+          });
+        },
+        { rootMargin: "-20% 0px -68% 0px" },
+      );
+
+      navTargets.forEach((section) => navObserver.observe(section));
+    </script>
+  </body>
+</html>

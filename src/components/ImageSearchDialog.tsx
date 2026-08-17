@@ -1,7 +1,7 @@
 import { MagnifyingGlass, Warning, X } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { searchImages } from "../lib/api";
-import type { SearchedImage } from "../types";
+import type { SearchSource, SearchedImage } from "../types";
 
 /**
  * Lưới chọn ảnh tham chiếu bố cục cho một beat. Pexels được thử trước ở backend;
@@ -12,7 +12,10 @@ export function ImageSearchDialog({
   initialQuery,
   aspectRatio,
   count,
-  selectedId,
+  enabledSources,
+  selectedId = "",
+  selectedIds = [],
+  applicationNote,
   onPick,
   onClose,
 }: {
@@ -20,28 +23,39 @@ export function ImageSearchDialog({
   initialQuery: string;
   aspectRatio: string;
   count: number;
-  selectedId: string;
-  onPick: (image: SearchedImage) => void;
+  enabledSources: SearchSource[];
+  selectedId?: string;
+  selectedIds?: string[];
+  applicationNote?: string;
+  onPick: (image: SearchedImage) => void | Promise<void>;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState(initialQuery);
   const [images, setImages] = useState<SearchedImage[]>([]);
-  const [provider, setProvider] = useState("");
+  const [sources, setSources] = useState<SearchSource[]>(enabledSources);
+  const [providers, setProviders] = useState<string[]>([]);
+  const [englishQuery, setEnglishQuery] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pickingId, setPickingId] = useState("");
   const [error, setError] = useState("");
 
   const run = async (term: string) => {
     const trimmed = term.trim();
     if (!trimmed) {
-      setError("Nhập từ khoá tiếng Anh mô tả cảnh vật cần tìm.");
+      setError("Nhập từ khoá mô tả cảnh vật cần tìm.");
+      return;
+    }
+    if (!sources.length) {
+      setError("Hãy bật ít nhất một nguồn ảnh.");
       return;
     }
     setBusy(true);
     setError("");
     try {
-      const result = await searchImages(trimmed, aspectRatio, count);
+      const result = await searchImages(trimmed, aspectRatio, count, sources);
       setImages(result.images);
-      setProvider(result.provider);
+      setProviders(result.providers);
+      setEnglishQuery(result.query);
       if (!result.images.length) setError("Không tìm thấy ảnh nào phù hợp.");
     } catch (searchError) {
       setError(
@@ -96,32 +110,75 @@ export function ImageSearchDialog({
           </button>
         </div>
 
+        <div className="search-sources" aria-label="Nguồn tìm ảnh">
+          {(["pexels", "serper"] as const).map((source) => (
+            <label key={source}>
+              <input
+                type="checkbox"
+                checked={sources.includes(source)}
+                onChange={(event) =>
+                  setSources((current) =>
+                    event.target.checked
+                      ? [...new Set([...current, source])]
+                      : current.filter((item) => item !== source),
+                  )
+                }
+              />
+              {source === "pexels" ? "Pexels" : "Serper / Google Images"}
+            </label>
+          ))}
+        </div>
+
         <p className="search-hint">
-          Từ khoá nên tả cảnh vật hoặc vật thể bằng tiếng Anh, không tả phong
-          cách — style đã được khoá bằng style reference.
+          Bạn có thể nhập bằng bất kỳ ngôn ngữ nào. Hệ thống luôn chuyển sang
+          tiếng Anh trước khi tìm.
+          {englishQuery && <> Query đã dùng: <strong>{englishQuery}</strong>.</>}
         </p>
 
-        {provider === "serper" && (
+        {applicationNote && (
+          <div className="search-application">
+            <strong>Ảnh sẽ được áp dụng thế nào?</strong>
+            <p>{applicationNote}</p>
+          </div>
+        )}
+
+        {providers.includes("serper") && (
           <p className="search-warning">
-            <Warning size={15} /> Pexels không có kết quả nên đang hiển thị ảnh
-            web từ Serper. Ảnh chưa rõ bản quyền, chỉ nên dùng làm tham chiếu bố
-            cục.
+            <Warning size={15} /> Kết quả Serper là ảnh web chưa rõ bản quyền,
+            chỉ nên dùng làm tham chiếu bố cục.
           </p>
         )}
 
         {error && <p className="search-error">{error}</p>}
+        {!busy && !error && images.length === 0 && (
+          <p className="search-empty">
+            Nhập keyword rồi bấm Tìm để xem ảnh trước khi thêm vào project.
+          </p>
+        )}
 
         <div className="search-grid">
           {images.map((image) => (
             <button
               key={image.id}
               className={`search-result${
-                image.id === selectedId ? " search-result-active" : ""
+                image.id === selectedId || selectedIds.includes(image.id)
+                  ? " search-result-active"
+                  : ""
               }`}
-              onClick={() => onPick(image)}
+              disabled={Boolean(pickingId)}
+              onClick={async () => {
+                setPickingId(image.id);
+                try {
+                  await onPick(image);
+                } finally {
+                  setPickingId("");
+                }
+              }}
             >
               <img src={image.thumbUrl} alt={image.attribution} loading="lazy" />
-              <span>{image.attribution}</span>
+              <span>
+                {pickingId === image.id ? "Đang thêm ảnh..." : image.attribution}
+              </span>
             </button>
           ))}
         </div>

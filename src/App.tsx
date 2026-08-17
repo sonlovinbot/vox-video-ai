@@ -1,6 +1,7 @@
 import {
   ArrowLeft,
   ArrowRight,
+  ArrowsClockwise,
   Check,
   CheckCircle,
   ClockCounterClockwise,
@@ -12,6 +13,7 @@ import {
   FloppyDisk,
   FolderSimple,
   GearSix,
+  Key,
   ImageSquare,
   Images,
   MagnifyingGlass,
@@ -43,6 +45,7 @@ import {
 } from "react";
 import {
   aspectResolution,
+  buildBeatPrompts,
   buildProjectMarkdown,
   buildStylePrompt,
   defaultConfig,
@@ -55,14 +58,19 @@ import {
 import {
   generateKeyframe,
   generateScriptWithAI,
+  analyzeReferences,
   generateVideo,
+  uploadVideo,
   suggestBrief,
-  searchImages,
   cacheImage,
   renderVideo,
   transcribeVoice,
   generateVoice,
   getProviderStatus,
+  updateProviderKeys,
+  buildSlotPayload,
+  createExtensionBatch,
+  getExtensionBatch,
 } from "./lib/api";
 import { loadSettings, saveSettings } from "./lib/settings";
 import {
@@ -75,10 +83,11 @@ import {
 import { CastingStep } from "./components/CastingStep";
 import { ExportPackDialog } from "./components/ExportPackDialog";
 import { BeatMediaTabs, type MediaTab } from "./components/BeatMediaTabs";
+import { ExtensionBatchCompleteDialog } from "./components/ExtensionBatchCompleteDialog";
 import { VideoBatchDialog } from "./components/VideoBatchDialog";
-import { NewProjectDialog } from "./components/NewProjectDialog";
 import { PreviewPlayer } from "./components/PreviewPlayer";
 import { TopicPickerDialog } from "./components/TopicPickerDialog";
+import { ImageSearchDialog } from "./components/ImageSearchDialog";
 import { COVER_LABELS } from "./lib/topics";
 import { alignWordsToScript } from "./lib/align";
 import { beatsWithRoleLabels } from "./lib/labels";
@@ -90,9 +99,23 @@ import {
 } from "./lib/timeline";
 import { VIDEO_PRESETS, qualityLabels } from "./lib/video";
 import { runWithLimit } from "./lib/concurrency";
+import {
+  EXTENSION_IMAGE_BATCH_SIZE,
+  selectImageRunCandidates,
+  splitImageRunWaves,
+} from "./lib/imageRuns";
 import { beatsNeedingVideo, framesForBeat, resolveVideoSettings } from "./lib/video";
 import { emptyRefPlan, parseRefPlanFromAI } from "./lib/casting";
 import { emptyBeatVideo } from "./lib/video";
+import { projectIdFromUrl, projectUrl } from "./lib/projectUrl";
+import {
+  checkChatGPTExtension,
+  checkGeminiExtension,
+  openChatGPTExtensionPanel,
+  openGeminiExtensionPanel,
+  startBatchInChatGPTExtension,
+  startBatchInGeminiExtension,
+} from "./lib/extensionBridge";
 import {
   deleteProjectById,
   listProjects,
@@ -113,6 +136,7 @@ import type {
   ProjectSummary,
   ProviderStatus,
   RefRole,
+  SearchedImage,
   VideoQuality,
   VideoResolution,
   ReferenceAsset,
@@ -180,6 +204,11 @@ const roleLabels: Record<RefRole, string> = {
 
 function App() {
   const [project, setProject] = useState<ProjectState>(() => {
+    const urlProjectId = projectIdFromUrl(window.location.href);
+    if (urlProjectId) {
+      const linkedProject = loadProjectById(urlProjectId);
+      if (linkedProject) return linkedProject;
+    }
     const saved = loadProject();
     return saved ?? emptyProject();
   });
@@ -191,7 +220,6 @@ function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
 
   useEffect(() => {
@@ -201,6 +229,24 @@ function App() {
   useEffect(() => {
     saveProject({ ...project, updatedAt: new Date().toISOString() });
   }, [project]);
+
+  useEffect(() => {
+    const nextUrl = projectUrl(project.id);
+    if (`${window.location.pathname}${window.location.search}` !== nextUrl) {
+      window.history.replaceState({ projectId: project.id }, "", nextUrl);
+    }
+  }, [project.id]);
+
+  useEffect(() => {
+    const openLinkedProject = () => {
+      const projectId = projectIdFromUrl(window.location.href);
+      if (!projectId) return;
+      const linkedProject = loadProjectById(projectId);
+      if (linkedProject) setProject(linkedProject);
+    };
+    window.addEventListener("popstate", openLinkedProject);
+    return () => window.removeEventListener("popstate", openLinkedProject);
+  }, []);
 
   useEffect(() => {
     saveSettings(settings);
@@ -273,7 +319,31 @@ function App() {
     }
     try {
       const config = project.config;
-      const references = project.references;
+      let references = project.references;
+      const referencesMissingAnalysis = references.filter(
+        (asset) =>
+          !asset.visualDescription?.trim() ||
+          !asset.visualKeywords?.length,
+      );
+      if (referencesMissingAnalysis.length) {
+        notify(
+          `AI đang đọc ${referencesMissingAnalysis.length} ảnh reference chưa phân tích...`,
+          "neutral",
+        );
+        const vision = await analyzeReferences(referencesMissingAnalysis);
+        const byId = new Map(vision.analyses.map((item) => [item.id, item]));
+        references = references.map((asset) => {
+          const analysis = byId.get(asset.id);
+          return analysis
+            ? {
+                ...asset,
+                visualDescription: analysis.description,
+                visualKeywords: analysis.keywords,
+              }
+            : asset;
+        });
+        setProject((current) => ({ ...current, references }));
+      }
       const result = await generateScriptWithAI(config, references, settings);
       const baseBeats = generateBeats(config, references);
       const beats = baseBeats.map((beat, index) => {
@@ -299,7 +369,12 @@ function App() {
         castingApproved: false,
         storyboardGenerated: false,
       }));
-      notify(`Đã tạo kịch bản bằng ${result.model}. Hãy kiểm tra claim.`, "success");
+      notify(
+        `Đã tạo kịch bản bằng ${result.model}${
+          result.elapsedMs ? ` trong ${(result.elapsedMs / 1000).toFixed(1)} giây` : ""
+        }. Hãy kiểm tra claim.`,
+        "success",
+      );
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Không gọi được DeepSeek.";
@@ -352,18 +427,24 @@ function App() {
     }, 700);
   };
 
-  const resetProject = (title: string, videoQuality: ProjectConfig["videoQuality"]) => {
+  const createBlankProject = () => {
     const fresh = emptyProject();
-    setProject({
+    const nextProject = {
       ...fresh,
       config: {
         ...fresh.config,
-        title: title.trim() || fresh.config.title,
-        videoQuality,
+        videoQuality: settings.video.quality,
       },
-    });
-    setIsNewProjectOpen(false);
-    notify("Đã tạo dự án mới. Dự án cũ vẫn nằm trong lịch sử.", "success");
+    };
+    window.history.pushState(
+      { projectId: nextProject.id },
+      "",
+      projectUrl(nextProject.id),
+    );
+    setProject(nextProject);
+    setIsSidebarOpen(false);
+    notify("Đã tạo video mới. Chọn Chủ đề để bắt đầu.", "success");
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const loadSample = () => {
@@ -436,6 +517,11 @@ function App() {
       const raw = await file.text();
       const parsed = JSON.parse(raw);
       const imported = normalizeProject(parsed.project || parsed);
+      window.history.pushState(
+        { projectId: imported.id },
+        "",
+        projectUrl(imported.id),
+      );
       setProject(imported);
       setIsSidebarOpen(false);
       notify("Đã nhập dự án và khôi phục tiến độ.", "success");
@@ -450,6 +536,11 @@ function App() {
       notify("Không tìm thấy dự án đã lưu.", "error");
       return;
     }
+    window.history.pushState(
+      { projectId: selected.id },
+      "",
+      projectUrl(selected.id),
+    );
     setProject(selected);
     setIsHistoryOpen(false);
     setIsSidebarOpen(false);
@@ -465,7 +556,7 @@ function App() {
         onClose={() => setIsSidebarOpen(false)}
         onNavigate={changeStep}
         onLoadSample={loadSample}
-        onReset={() => setIsNewProjectOpen(true)}
+        onReset={createBlankProject}
         onSettings={() => setIsSettingsOpen(true)}
         onHistory={() => setIsHistoryOpen(true)}
         onImport={importProjectFile}
@@ -525,6 +616,7 @@ function App() {
             <StoryboardStep
               project={project}
               setProject={setProject}
+              setSettings={setSettings}
               notify={notify}
               onBack={() => changeStep("casting")}
               onExport={exportProject}
@@ -534,14 +626,6 @@ function App() {
           )}
         </div>
       </main>
-
-      {isNewProjectOpen && (
-        <NewProjectDialog
-          defaultQuality={settings.video.quality}
-          onCreate={resetProject}
-          onClose={() => setIsNewProjectOpen(false)}
-        />
-      )}
 
       {toast && (
         <div className={`toast toast-${toast.tone}`} role="status">
@@ -809,10 +893,31 @@ function SetupStep({
 }: SetupStepProps) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [isTopicOpen, setIsTopicOpen] = useState(false);
+  const [isRefSearchOpen, setIsRefSearchOpen] = useState(false);
+  const [pickedRefImageIds, setPickedRefImageIds] = useState<string[]>([]);
   const [isSuggesting, setIsSuggesting] = useState(false);
-  const [isFindingRefs, setIsFindingRefs] = useState(false);
 
   const [isDragging, setIsDragging] = useState(false);
+
+  useEffect(() => {
+    setPickedRefImageIds([]);
+    setIsRefSearchOpen(false);
+  }, [project.id]);
+
+  const updateVideoTitle = (title: string) => {
+    setProject((current) => ({
+      ...current,
+      config: {
+        ...current.config,
+        title,
+        // Cover title is derived from the video title; there is no second field.
+        coverTitle: title,
+      },
+      scriptApproved: false,
+      castingApproved: false,
+      storyboardGenerated: false,
+    }));
+  };
 
   /** Tiêu đề chưa đặt thì mọi gợi ý đều vô nghĩa — AI không biết viết về gì. */
   const hasRealTitle =
@@ -861,44 +966,37 @@ function SetupStep({
    * Ảnh nạp vào với role environment và lock content: đây là ảnh chụp thật, chỉ
    * dùng làm tham chiếu bố cục, model sẽ vẽ lại thành giấy cắt.
    */
-  const suggestRefImages = async () => {
-    if (!hasRealTitle) {
-      setIsTopicOpen(true);
-      notify("Chọn một chủ đề trước, rồi mới tìm được ảnh liên quan.", "neutral");
+  const addSuggestedRef = async (image: SearchedImage) => {
+    if (project.references.length >= 6) {
+      notify("Đã đủ 6 ảnh reference.", "error");
       return;
     }
-    const query = project.config.title.trim();
-    setIsFindingRefs(true);
+    if (pickedRefImageIds.includes(image.id)) {
+      notify("Ảnh này đã được thêm.", "neutral");
+      return;
+    }
     try {
-      const { images } = await searchImages(query, project.config.aspectRatio, 4);
-      if (!images.length) throw new Error("Không tìm thấy ảnh phù hợp.");
-      const room = Math.max(0, 6 - project.references.length);
-      const picked = images.slice(0, room);
-      if (!picked.length) throw new Error("Đã đủ 6 ảnh reference.");
-
-      const assets = await Promise.all(
-        picked.map(async (image) => {
-          const { cachedUrl } = await cacheImage(image.fullUrl);
-          return {
-            id: crypto.randomUUID(),
-            name: image.attribution || "Ảnh Pexels",
-            type: "image/jpeg",
-            size: 0,
-            previewUrl: cachedUrl,
-            role: "environment" as const,
-            notes: `Tham chiếu bố cục. ${image.attribution}`,
-          };
-        }),
-      );
+      const { cachedUrl } = await cacheImage(image.fullUrl);
+      const asset: ReferenceAsset = {
+        id: crypto.randomUUID(),
+        name: image.attribution || `Ảnh ${image.source}`,
+        type: "image/jpeg",
+        size: 0,
+        previewUrl: cachedUrl,
+        role: "environment",
+        notes: "Content lock: chỉ lấy bố cục và vật thể nhìn thấy trong ảnh.",
+      };
       setProject((current) => ({
         ...current,
-        references: [...current.references, ...assets],
+        references:
+          current.references.length < 6
+            ? [...current.references, asset]
+            : current.references,
       }));
-      notify(`Đã nạp ${assets.length} ảnh tham chiếu từ Pexels.`, "success");
+      setPickedRefImageIds((current) => [...current, image.id]);
+      notify(`Đã thêm ảnh ${image.source} làm reference bối cảnh.`, "success");
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Không tìm được ảnh.", "error");
-    } finally {
-      setIsFindingRefs(false);
+      notify(error instanceof Error ? error.message : "Không thêm được ảnh.", "error");
     }
   };
 
@@ -934,6 +1032,26 @@ function SetupStep({
       storyboardGenerated: false,
     }));
     notify(`Đã thêm ${assets.length} ảnh reference.`, "success");
+  };
+
+  const pasteReferences = async () => {
+    try {
+      const items = await navigator.clipboard.read();
+      const files: File[] = [];
+      for (const item of items) {
+        const type = item.types.find((value) => value.startsWith("image/"));
+        if (!type) continue;
+        const blob = await item.getType(type);
+        files.push(new File([blob], "clipboard.png", { type }));
+      }
+      if (!files.length) {
+        notify("Clipboard không có ảnh.", "error");
+        return;
+      }
+      await processFiles(files);
+    } catch {
+      notify("Không đọc được clipboard. Hãy bấm vào vùng ảnh rồi Ctrl/Cmd+V.", "error");
+    }
   };
 
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
@@ -977,11 +1095,11 @@ function SetupStep({
             description="Những trường này đi xuyên suốt toàn bộ prompt chain."
           >
             <div className="form-grid two-cols">
-              <Field label="Tên dự án">
+              <Field label="Tiêu đề video">
                 <div className="field-with-action">
                   <input
                     value={project.config.title}
-                    onChange={(event) => updateConfig("title", event.target.value)}
+                    onChange={(event) => updateVideoTitle(event.target.value)}
                     placeholder="Ví dụ: VinFast tại Đông Nam Á"
                   />
                   <button
@@ -1006,15 +1124,6 @@ function SetupStep({
                     </option>
                   ))}
                 </select>
-              </Field>
-              <Field label="Tiêu đề cover (để trống thì dùng tên dự án)">
-                <input
-                  value={project.config.coverTitle}
-                  onChange={(event) =>
-                    updateConfig("coverTitle", event.target.value)
-                  }
-                  placeholder="Hành trình đơn hàng 39K"
-                />
               </Field>
               <Field label="Ngôn ngữ">
                 <select
@@ -1151,11 +1260,16 @@ function SetupStep({
             <div className="section-actions">
               <button
                 className="button button-quiet button-small"
-                onClick={() => void suggestRefImages()}
-                disabled={isFindingRefs}
+                onClick={() => setIsRefSearchOpen(true)}
               >
-                {isFindingRefs ? <span className="button-loader" /> : <MagnifyingGlass size={16} />}
+                <MagnifyingGlass size={16} />
                 Gợi ý ảnh từ Pexels
+              </button>
+              <button
+                className="button button-quiet button-small"
+                onClick={() => void pasteReferences()}
+              >
+                Dán ảnh
               </button>
               <span className="field-help">
                 Nạp với vai trò bối cảnh: model chỉ lấy bố cục rồi vẽ lại thành giấy cắt.
@@ -1180,6 +1294,15 @@ function SetupStep({
               }}
               onDragLeave={() => setIsDragging(false)}
               onDrop={onDrop}
+              onPaste={(event) => {
+                const files = Array.from(event.clipboardData.files).filter((file) =>
+                  file.type.startsWith("image/"),
+                );
+                if (files.length) {
+                  event.preventDefault();
+                  void processFiles(files);
+                }
+              }}
               onClick={() => fileInput.current?.click()}
               role="button"
               tabIndex={0}
@@ -1233,6 +1356,14 @@ function SetupStep({
                           />
                         </Field>
                       </div>
+                      {asset.visualDescription && (
+                        <p className="reference-analysis">
+                          <strong>AI nhìn thấy:</strong> {asset.visualDescription}
+                          {asset.visualKeywords?.length
+                            ? ` Keyword: ${asset.visualKeywords.join(", ")}`
+                            : ""}
+                        </p>
+                      )}
                     </div>
                     <button
                       className="icon-button danger-button"
@@ -1311,10 +1442,27 @@ function SetupStep({
         <TopicPickerDialog
           onClose={() => setIsTopicOpen(false)}
           onPick={(title) => {
-            updateConfig("title", title);
+            updateVideoTitle(title);
             setIsTopicOpen(false);
             notify("Đã chọn chủ đề. Bấm AI gợi ý để điền định hướng.", "success");
           }}
+        />
+      )}
+
+      {isRefSearchOpen && (
+        <ImageSearchDialog
+          beatLabel="Chọn ảnh reference cho toàn bộ video"
+          initialQuery={hasRealTitle ? project.config.title : ""}
+          aspectRatio={project.config.aspectRatio}
+          count={settings.imageSearchCount}
+          enabledSources={[
+            ...(settings.searchPexels ? (["pexels"] as const) : []),
+            ...(settings.searchSerper ? (["serper"] as const) : []),
+          ]}
+          selectedIds={pickedRefImageIds}
+          applicationNote="Mỗi ảnh được thêm vào project với vai trò Bối cảnh và content lock. Trước khi viết script, AI sẽ đọc nội dung ảnh, trích keyword chính xác và dùng chúng để lập ref plan cho từng beat."
+          onPick={addSuggestedRef}
+          onClose={() => setIsRefSearchOpen(false)}
         />
       )}
 
@@ -1563,6 +1711,7 @@ function ScriptStep({
 function StoryboardStep({
   project,
   setProject,
+  setSettings,
   notify,
   onBack,
   onExport,
@@ -1571,6 +1720,7 @@ function StoryboardStep({
 }: {
   project: ProjectState;
   setProject: React.Dispatch<React.SetStateAction<ProjectState>>;
+  setSettings: React.Dispatch<React.SetStateAction<AppSettings>>;
   notify: (message: string, tone?: ToastState["tone"]) => void;
   onBack: () => void;
   onExport: () => void;
@@ -1585,7 +1735,39 @@ function StoryboardStep({
   const [isExportPackOpen, setIsExportPackOpen] = useState(false);
   const [isVideoBatchOpen, setIsVideoBatchOpen] = useState(false);
   const [isBatchVideo, setIsBatchVideo] = useState(false);
+  const [uploadingVideoIds, setUploadingVideoIds] = useState<string[]>([]);
+  const [batchVideoUploadProgress, setBatchVideoUploadProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
+  const legacyExtensionBatchId =
+    localStorage.getItem(`vox:chatgpt-batch:${project.id}`) || "";
+  const [extensionBatchId, setExtensionBatchId] = useState(
+    () =>
+      localStorage.getItem(`vox:image-extension-batch:${project.id}`) ||
+      legacyExtensionBatchId,
+  );
+  const [extensionExecutor, setExtensionExecutor] = useState<"chatgpt" | "gemini">(
+    () =>
+      (localStorage.getItem(`vox:image-extension-executor:${project.id}`) as
+        | "chatgpt"
+        | "gemini"
+        | null) || (legacyExtensionBatchId ? "chatgpt" : "gemini"),
+  );
+  const [extensionBatchComplete, setExtensionBatchComplete] = useState<{
+    executor: "chatgpt" | "gemini";
+    completedCount: number;
+    remainingCount: number;
+  } | null>(null);
+  const [isCreatingExtensionBatch, setIsCreatingExtensionBatch] = useState(false);
+  const [extensionBridgeError, setExtensionBridgeError] = useState("");
+  const [imageFilter, setImageFilter] = useState<"all" | "failed">("all");
   const [mediaTabs, setMediaTabs] = useState<Record<string, MediaTab>>({});
+  const imageAbort = useRef<AbortController | null>(null);
+  const extensionBatchLaunch = useRef(false);
+  const reportedExtensionErrorBatch = useRef("");
+  const reportedExtensionCompletionBatch = useRef("");
+  const extensionRetryGraceUntil = useRef(0);
   // Một controller cho cả lượt: bấm Dừng là abort hết, server nhận được và gọi
   // cancel lên Replicate cho từng prediction đang chạy.
   const videoAbort = useRef<AbortController | null>(null);
@@ -1593,10 +1775,260 @@ function StoryboardStep({
     () => buildStylePrompt(project.config, project.references),
     [project.config, project.references],
   );
-  const pendingCount = project.beats.filter(
-    (beat) => !beat.outputImage || beat.generationStatus === "failed",
+  const failedImageCount = project.beats.filter(
+    (beat) => beat.generationStatus === "failed",
   ).length;
+  const newImageCount = project.beats.filter(
+    (beat) => !beat.outputImage && beat.generationStatus !== "failed",
+  ).length;
+  const canceledImageCount = project.beats.filter(
+    (beat) => beat.generationStatus === "canceled",
+  ).length;
+  const canceledVideoCount = project.beats.filter(
+    (beat) => beat.video.status === "canceled",
+  ).length;
+  const visibleBeats =
+    imageFilter === "failed" && failedImageCount > 0
+      ? project.beats.filter((beat) => beat.generationStatus === "failed")
+      : project.beats;
   const ratioClass = `storyboard-ratio-${project.config.aspectRatio.replace(":", "-")}`;
+  const executorLabel = extensionExecutor === "gemini" ? "Gemini" : "ChatGPT";
+  useEffect(() => {
+    if (!extensionBatchId) return;
+    let stopped = false;
+    const sync = async () => {
+      try {
+        const batch = await getExtensionBatch(extensionBatchId);
+        if (stopped) return;
+        setProject((current) => ({
+          ...current,
+          beats: current.beats.map((beat) => {
+            const task = batch.tasks.find((item) => item.beatId === beat.id);
+            if (!task) return beat;
+            if (task.state === "completed" && task.result?.url) {
+              return {
+                ...beat,
+                outputImage: task.result.url,
+                outputName:
+                  beat.outputName ||
+                  `B${beat.index.toString().padStart(2, "0")}-${extensionExecutor}.png`,
+                generationStatus: "completed",
+                generationError: "",
+                imageProvider: extensionExecutor,
+              };
+            }
+            if (task.state === "failed") {
+              return {
+                ...beat,
+                generationStatus: "failed",
+                generationError: task.error
+                  ? `${task.error.code}: ${task.error.message}`
+                  : `${executorLabel} extension task failed.`,
+              };
+            }
+            if (["claiming", "uploading_references", "submitting", "waiting", "collecting", "returning"].includes(task.state)) {
+              return { ...beat, generationStatus: "generating", generationError: "" };
+            }
+            if (task.state === "queued") {
+              return { ...beat, generationStatus: "queued", generationError: "" };
+            }
+            return beat;
+          }),
+        }));
+        const failedTasks = batch.tasks.filter((task) => task.state === "failed");
+        if (
+          failedTasks.length &&
+          Date.now() >= extensionRetryGraceUntil.current
+        ) {
+          const message =
+            `${failedTasks.length} ảnh ${executorLabel} bị lỗi. Lượt hiện tại đã dừng; ` +
+            `bấm Reconnect ${executorLabel} để thử lại.`;
+          setExtensionBridgeError(message);
+          if (reportedExtensionErrorBatch.current !== batch.batchId) {
+            reportedExtensionErrorBatch.current = batch.batchId;
+            notify(message, "error");
+          }
+        }
+        if (["completed", "canceled"].includes(batch.state)) {
+          localStorage.removeItem(`vox:image-extension-batch:${project.id}`);
+          localStorage.removeItem(`vox:chatgpt-batch:${project.id}`);
+          setExtensionBatchId("");
+          if (batch.state === "completed") {
+            reportedExtensionErrorBatch.current = "";
+            setExtensionBridgeError("");
+            if (reportedExtensionCompletionBatch.current !== batch.batchId) {
+              reportedExtensionCompletionBatch.current = batch.batchId;
+              const completedIds = new Set(
+                batch.tasks
+                  .filter((task) => task.state === "completed" && task.result?.url)
+                  .map((task) => task.beatId),
+              );
+              const remainingCount = project.beats.filter(
+                (beat) => !beat.outputImage && !completedIds.has(beat.id),
+              ).length;
+              setExtensionBatchComplete({
+                executor: extensionExecutor,
+                completedCount: completedIds.size,
+                remainingCount,
+              });
+              notify(`${executorLabel} đã hoàn tất ${completedIds.size} ảnh.`, "success");
+            }
+          }
+        }
+      } catch {
+        // A temporary API failure must not discard the durable batch identity.
+      }
+    };
+    void sync();
+    const timer = window.setInterval(() => void sync(), 2500);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    extensionBatchId,
+    extensionExecutor,
+    project.id,
+    notify,
+    setProject,
+  ]);
+
+  const generateWithExtension = async (
+    executor: "chatgpt" | "gemini",
+  ) => {
+    if (extensionBatchLaunch.current) return;
+    const label = executor === "gemini" ? "Gemini" : "ChatGPT";
+    const openPanel =
+      executor === "gemini" ? openGeminiExtensionPanel : openChatGPTExtensionPanel;
+    const checkExtension =
+      executor === "gemini" ? checkGeminiExtension : checkChatGPTExtension;
+    const startExtension =
+      executor === "gemini"
+        ? startBatchInGeminiExtension
+        : startBatchInChatGPTExtension;
+    const beats =
+      splitImageRunWaves(
+        selectImageRunCandidates(project.beats, "failed"),
+        EXTENSION_IMAGE_BATCH_SIZE,
+      )[0] || [];
+    if (!beats.length) {
+      notify("Mọi beat đã có keyframe.", "success");
+      return;
+    }
+    extensionBatchLaunch.current = true;
+    setExtensionExecutor(executor);
+    localStorage.setItem(`vox:image-extension-executor:${project.id}`, executor);
+    setExtensionBatchComplete(null);
+    const panelOpening = openPanel();
+    void panelOpening.catch(() => {});
+    setIsCreatingExtensionBatch(true);
+    setExtensionBridgeError("");
+    try {
+      const extension = await checkExtension();
+      await panelOpening;
+      if (!extension.installed || !extension.connected) {
+        throw new Error("Extension chưa sẵn sàng kết nối với VOX.");
+      }
+      const tasks = await Promise.all(
+        beats.map(async (beat) => {
+          const currentPrompts = buildBeatPrompts(
+            project.config,
+            project.references,
+            beat,
+            project.searchedImages,
+          );
+          const slots = await buildSlotPayload(
+            beat.refPlan.slots,
+            project.references,
+            project.searchedImages,
+          );
+          return {
+            beatId: beat.id,
+            prompt: currentPrompts.imagePrompt,
+            aspectRatio: project.config.aspectRatio,
+            references: slots.map((slot, index) => {
+              const source = slot.kind === "upload" ? slot.dataUrl : slot.url;
+              return {
+                id: `${beat.id}-ref-${index + 1}`,
+                name: `B${beat.index.toString().padStart(2, "0")}-ref-${index + 1}.png`,
+                url: source,
+              };
+            }),
+            expectedOutputName: `B${beat.index.toString().padStart(2, "0")}-${executor}.png`,
+          };
+        }),
+      );
+      const batch = await createExtensionBatch({ projectId: project.id, tasks });
+      localStorage.setItem(`vox:image-extension-batch:${project.id}`, batch.batchId);
+      setExtensionBatchId(batch.batchId);
+      await navigator.clipboard.writeText(batch.batchId).catch(() => {});
+      setProject((current) => ({
+        ...current,
+        beats: current.beats.map((beat) =>
+          beats.some((item) => item.id === beat.id)
+            ? { ...beat, generationStatus: "queued", generationError: "" }
+            : beat,
+        ),
+      }));
+      try {
+        await startExtension(batch.batchId, {
+          executionMode: settings.chatgptExtensionMode,
+          openNewChat: settings.chatgptOpenNewConversation,
+          resetWorkspace: settings.chatgptResetWorkspace,
+        });
+        notify(
+          settings.chatgptExtensionMode === "auto"
+            ? `Extension đã nhận batch. Đang mở ${label} và bắt đầu tạo ảnh.`
+            : "Extension đã nạp prompt và reference. Hãy kiểm tra rồi bấm Thêm và chạy.",
+          "success",
+        );
+      } catch (bridgeError) {
+        const message =
+          bridgeError instanceof Error
+            ? bridgeError.message
+            : "Extension không nhận batch.";
+        setExtensionBridgeError(message);
+        notify(message, "error");
+      }
+    } catch (error) {
+      notify(error instanceof Error ? error.message : `Không tạo được ${label} batch.`, "error");
+    } finally {
+      extensionBatchLaunch.current = false;
+      setIsCreatingExtensionBatch(false);
+    }
+  };
+
+  const reconnectImageExtension = async () => {
+    if (!extensionBatchId) return;
+    const openPanel =
+      extensionExecutor === "gemini"
+        ? openGeminiExtensionPanel
+        : openChatGPTExtensionPanel;
+    const startExtension =
+      extensionExecutor === "gemini"
+        ? startBatchInGeminiExtension
+        : startBatchInChatGPTExtension;
+    const panelOpening = openPanel();
+    setIsCreatingExtensionBatch(true);
+    setExtensionBridgeError("");
+    extensionRetryGraceUntil.current = Date.now() + 30_000;
+    try {
+      await panelOpening;
+      await startExtension(extensionBatchId, {
+        executionMode: settings.chatgptExtensionMode,
+        openNewChat: settings.chatgptOpenNewConversation,
+        resetWorkspace: settings.chatgptResetWorkspace,
+      });
+      notify(`Extension đã kết nối lại và nhận ${executorLabel} batch.`, "success");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Extension không nhận batch.";
+      setExtensionBridgeError(message);
+      notify(message, "error");
+    } finally {
+      setIsCreatingExtensionBatch(false);
+    }
+  };
 
   const copyText = async (text: string, label: string) => {
     try {
@@ -1628,7 +2060,30 @@ function StoryboardStep({
     notify("Đã gắn keyframe vào storyboard.", "success");
   };
 
-  const createKeyframe = async (beat: Beat, quiet = false) => {
+  const pasteOutput = async (beatId: string) => {
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = item.types.find((value) => value.startsWith("image/"));
+        if (!type) continue;
+        const blob = await item.getType(type);
+        await uploadOutput(
+          beatId,
+          new File([blob], "clipboard-keyframe.png", { type }),
+        );
+        return;
+      }
+      notify("Clipboard không có ảnh.", "error");
+    } catch {
+      notify("Không đọc được clipboard. Hãy bấm vào card rồi Ctrl/Cmd+V.", "error");
+    }
+  };
+
+  const createKeyframe = async (
+    beat: Beat,
+    signal?: AbortSignal,
+    quiet = false,
+  ) => {
     setGeneratingBeatIds((current) => [...current, beat.id]);
     setProject((current) => ({
       ...current,
@@ -1645,12 +2100,18 @@ function StoryboardStep({
     }));
     try {
       const result = await generateKeyframe(
-        beat.imagePrompt,
+        buildBeatPrompts(
+          project.config,
+          project.references,
+          beat,
+          project.searchedImages,
+        ).imagePrompt,
         project.config,
         beat.refPlan.slots,
         project.references,
         project.searchedImages,
         settings,
+        signal,
       );
       setProject((current) => ({
         ...current,
@@ -1677,6 +2138,8 @@ function StoryboardStep({
       }
       return true;
     } catch (error) {
+      const aborted =
+        signal?.aborted || (error instanceof Error && error.name === "AbortError");
       const message =
         error instanceof Error ? error.message : "Không tạo được keyframe.";
       setProject((current) => ({
@@ -1685,13 +2148,13 @@ function StoryboardStep({
           item.id === beat.id
             ? {
                 ...item,
-                generationStatus: "failed",
-                generationError: message,
+                generationStatus: aborted ? "canceled" : "failed",
+                generationError: aborted ? "" : message,
               }
             : item,
         ),
       }));
-      if (!quiet) notify(message, "error");
+      if (!quiet && !aborted) notify(message, "error");
       return false;
     } finally {
       setGeneratingBeatIds((current) =>
@@ -1713,6 +2176,107 @@ function StoryboardStep({
       ),
     }));
 
+  const uploadVideoOutput = async (
+    beat: Beat,
+    file?: File,
+    options: { quiet?: boolean; outputName?: string } = {},
+  ) => {
+    if (!file || !file.type.startsWith("video/")) {
+      notify("Hãy chọn file video hợp lệ.", "error");
+      return false;
+    }
+    const previousVideo = beat.video;
+    setUploadingVideoIds((current) => [...current, beat.id]);
+    patchVideo(beat.id, { status: "generating", error: "" });
+    try {
+      const [stored, metadata] = await Promise.all([
+        uploadVideo(file),
+        readVideoMetadata(file),
+      ]);
+      const fps = settings.video.fps;
+      const durationSeconds =
+        metadata.durationSeconds || Math.max(0, beat.end - beat.start);
+      patchVideo(beat.id, {
+        status: "completed",
+        name: options.outputName || orderedVideoName(beat.index, file.name),
+        url: stored.url,
+        remoteUrl: "",
+        predictionId: "manual-upload",
+        durationSeconds,
+        frames: Math.max(1, Math.round(durationSeconds * fps)),
+        fps,
+        resolution:
+          metadata.width && metadata.height
+            ? `${metadata.width}x${metadata.height}`
+            : settings.video.resolution,
+        error: "",
+        createdAt: new Date().toISOString(),
+      });
+      setTab(beat.id, "video");
+      if (!options.quiet) {
+        notify(`Đã nạp video ${file.name} cho B${beat.index}.`, "success");
+      }
+      return true;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Không nạp được video.";
+      patchVideo(beat.id, {
+        ...previousVideo,
+        status: previousVideo.url ? previousVideo.status : "failed",
+        error: previousVideo.url ? previousVideo.error : message,
+      });
+      if (!options.quiet) notify(message, "error");
+      return false;
+    } finally {
+      setUploadingVideoIds((current) =>
+        current.filter((id) => id !== beat.id),
+      );
+    }
+  };
+
+  const uploadVideoBatch = async (files: File[]) => {
+    const videos = files
+      .filter((file) => file.type.startsWith("video/"))
+      .sort((left, right) =>
+        left.name.localeCompare(right.name, undefined, {
+          numeric: true,
+          sensitivity: "base",
+        }),
+      );
+    if (!videos.length) {
+      notify("Không có file video hợp lệ.", "error");
+      return;
+    }
+    const beats = [...project.beats].sort((left, right) => left.index - right.index);
+    const total = Math.min(videos.length, beats.length);
+    if (!total) {
+      notify("Storyboard chưa có beat để nhận video.", "error");
+      return;
+    }
+    setBatchVideoUploadProgress({ done: 0, total });
+    setMediaTabs((current) => ({
+      ...current,
+      ...Object.fromEntries(beats.slice(0, total).map((beat) => [beat.id, "video"])),
+    }));
+    let completed = 0;
+    for (let index = 0; index < total; index += 1) {
+      const ok = await uploadVideoOutput(beats[index], videos[index], {
+        quiet: true,
+        outputName: orderedVideoName(beats[index].index, videos[index].name),
+      });
+      if (ok) completed += 1;
+      setBatchVideoUploadProgress({ done: index + 1, total });
+    }
+    setBatchVideoUploadProgress(null);
+    const ignored = videos.length - total;
+    notify(
+      `Đã nạp ${completed}/${total} video theo thứ tự B01–B${String(total).padStart(2, "0")}.${
+        ignored > 0 ? ` Bỏ qua ${ignored} file dư.` : ""
+      }`,
+      completed === total ? "success" : "error",
+    );
+  };
+
   const createVideo = async (
     beat: Beat,
     signal?: AbortSignal,
@@ -1728,9 +2292,15 @@ function StoryboardStep({
     const frames = framesForBeat(beat, video.fps);
     patchVideo(beat.id, { status: "generating", error: "" });
     try {
+      const currentPrompts = buildBeatPrompts(
+        project.config,
+        project.references,
+        beat,
+        project.searchedImages,
+      );
       const result = await generateVideo(
         // Prompt riêng cho API; motionPrompt giữ nguyên cho extension.
-        beat.apiMotionPrompt || beat.motionPrompt,
+        currentPrompts.apiMotionPrompt || currentPrompts.motionPrompt,
         beat.outputImage,
         frames,
         { ...settings, video },
@@ -1739,6 +2309,7 @@ function StoryboardStep({
       patchVideo(beat.id, {
         ...result,
         status: "completed",
+        name: `B${beat.index.toString().padStart(2, "0")}-replicate.mp4`,
         error: "",
         createdAt: new Date().toISOString(),
       });
@@ -1805,27 +2376,82 @@ function StoryboardStep({
     notify("Đang huỷ các video đang dựng...", "neutral");
   };
 
-  const createBatch = async () => {
-    const candidates = project.beats
-      .filter((beat) => !beat.outputImage || beat.generationStatus === "failed")
-      .slice(0, 5);
+  const stopImageBatch = () => {
+    imageAbort.current?.abort();
+    notify("Đang dừng batch ảnh...", "neutral");
+  };
+
+  const createBatch = async (mode: "new" | "failed") => {
+    const candidates = selectImageRunCandidates(project.beats, mode);
     if (!candidates.length) {
-      notify("Tất cả keyframe đã có ảnh.", "neutral");
+      notify(
+        mode === "failed"
+          ? "Không có keyframe lỗi cần thử lại."
+          : "Không còn keyframe mới cần tạo.",
+        "neutral",
+      );
       return;
     }
     setIsBatchGenerating(true);
-    const results = await Promise.all(
-      candidates.map((beat) => createKeyframe(beat, true)),
-    );
-    const completed = results.filter(Boolean).length;
-    const failed = results.length - completed;
-    notify(
-      failed
-        ? `Batch hoàn tất: ${completed} ảnh thành công, ${failed} ảnh cần thử lại.`
-        : `Đã tạo xong ${completed} keyframe trong batch.`,
-      failed ? "error" : "success",
-    );
+    const controller = new AbortController();
+    imageAbort.current = controller;
+    let completed = 0;
+    let failed = 0;
+    let processed = 0;
+    const waves = splitImageRunWaves(candidates, 5);
+    for (const wave of waves) {
+      if (controller.signal.aborted || failed > 0) break;
+      setProject((current) => ({
+        ...current,
+        beats: current.beats.map((beat) =>
+          wave.some((candidate) => candidate.id === beat.id)
+            ? { ...beat, generationStatus: "queued", generationError: "" }
+            : beat,
+        ),
+      }));
+      let waveFailed = 0;
+      await runWithLimit(wave, 5, async (beat) => {
+        if (controller.signal.aborted) {
+          setProject((current) => ({
+            ...current,
+            beats: current.beats.map((item) =>
+              item.id === beat.id
+                ? { ...item, generationStatus: "canceled" }
+                : item,
+            ),
+          }));
+          return;
+        }
+        const ok = await createKeyframe(beat, controller.signal, true);
+        processed += 1;
+        if (ok) completed += 1;
+        else if (!controller.signal.aborted) {
+          failed += 1;
+          waveFailed += 1;
+        }
+      });
+      if (!controller.signal.aborted && waveFailed === 0 && processed < candidates.length) {
+        notify(
+          `Đã xong ${completed}/${candidates.length} ảnh. Đang chạy nhóm tiếp theo...`,
+          "neutral",
+        );
+      }
+    }
+    imageAbort.current = null;
     setIsBatchGenerating(false);
+    if (controller.signal.aborted) {
+      notify(`Đã dừng. ${completed} ảnh hoàn tất trước khi dừng.`, "neutral");
+    } else {
+      notify(
+        failed
+          ? `Đã dừng sau ${completed} ảnh thành công vì có ${failed} ảnh lỗi. ` +
+            "Bấm “Thử lại và tiếp tục” để chạy tiếp đến hết."
+          : mode === "failed"
+            ? `Đã khôi phục và tạo xong toàn bộ ${completed} keyframe còn thiếu.`
+            : `Đã tạo xong toàn bộ ${completed} keyframe còn thiếu.`,
+        failed ? "error" : "success",
+      );
+    }
   };
 
   return (
@@ -1850,7 +2476,7 @@ function StoryboardStep({
                 onClick={() => setIsVideoBatchOpen(true)}
               >
                 <FilmStrip size={18} />
-                Dựng video hàng loạt
+                {canceledVideoCount ? "Tiếp tục dựng video" : "Dựng video hàng loạt"}
               </button>
             )}
             <button
@@ -1915,33 +2541,200 @@ function StoryboardStep({
             </div>
           </div>
 
-          <div className="batch-toolbar">
+          <div
+            className={`batch-toolbar ${
+              failedImageCount ? "batch-toolbar-error" : ""
+            }`}
+          >
             <div>
-              <strong>{pendingCount} keyframe chưa hoàn tất</strong>
-              <span>Mỗi lần chạy tối đa 5 beat. Beat lỗi có thể thử lại riêng.</span>
+              <strong>
+                {newImageCount} ảnh chưa tạo
+                {failedImageCount ? `, ${failedImageCount} ảnh lỗi` : ""}
+              </strong>
+              <span>
+                Gemini/ChatGPT xử lý tối đa 12 ảnh mỗi lượt. Khi xong hệ thống
+                sẽ dừng và hỏi bạn trước khi chạy lượt tiếp theo.
+              </span>
+              {failedImageCount > 0 && (
+                <span className="batch-stop-message">
+                  Lượt đang dừng tại ảnh lỗi. Bấm “Thử lại ảnh lỗi” để chạy lại.
+                </span>
+              )}
+              {extensionBatchId && (
+                <span>
+                  {executorLabel} batch: {extensionBatchId}
+                  {extensionBridgeError
+                    ? ` · ${extensionBridgeError}`
+                    : " · Extension đang xử lý tối đa 12 ảnh"}
+                </span>
+              )}
             </div>
-            <button
-              className="button button-primary"
-              onClick={() => void createBatch()}
-              disabled={isBatchGenerating || pendingCount === 0}
-            >
-              {isBatchGenerating ? (
-                <>
-                  <span className="button-loader" />
-                  Đang chạy batch
-                </>
+            <div className="batch-actions">
+              <label className="chatgpt-inline-check">
+                <input
+                  type="checkbox"
+                  checked={settings.chatgptOpenNewConversation}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      chatgptOpenNewConversation: event.target.checked,
+                    }))
+                  }
+                />
+                <span>Mở tab mới</span>
+              </label>
+              {extensionBatchId ? (
+                <button
+                  className="button button-quiet"
+                  disabled={isCreatingExtensionBatch}
+                  onClick={() => void reconnectImageExtension()}
+                  title={`Batch đang chạy: ${extensionBatchId}`}
+                >
+                  <Sparkle size={18} weight="fill" />
+                  {isCreatingExtensionBatch
+                    ? "Đang kết nối..."
+                    : `Reconnect ${executorLabel}`}
+                </button>
               ) : (
                 <>
-                  <Stack size={18} weight="fill" />
-                  Tạo {Math.min(5, pendingCount)} ảnh tiếp theo
+                  <button
+                    className="button button-quiet"
+                    disabled={isCreatingExtensionBatch}
+                    onClick={() => void generateWithExtension("chatgpt")}
+                  >
+                    <Sparkle size={18} weight="fill" />
+                    Generate with ChatGPT
+                  </button>
+                  <button
+                    className="button button-quiet"
+                    disabled={isCreatingExtensionBatch}
+                    onClick={() => void generateWithExtension("gemini")}
+                  >
+                    <Sparkle size={18} weight="fill" />
+                    Generate with Gemini
+                  </button>
                 </>
               )}
-            </button>
+              {isBatchGenerating ? (
+                <button className="button button-danger" onClick={stopImageBatch}>
+                  <Stop size={18} weight="fill" />
+                  Dừng tạo ảnh
+                </button>
+              ) : (
+                <>
+              {failedImageCount > 0 && (
+                <>
+                  <button
+                    className="button button-quiet"
+                    onClick={() =>
+                      setImageFilter((current) =>
+                        current === "failed" ? "all" : "failed",
+                      )
+                    }
+                  >
+                    {imageFilter === "failed" ? "Hiện tất cả" : "Chỉ xem ảnh lỗi"}
+                  </button>
+                  <button
+                    className="button button-danger"
+                    onClick={() => void createBatch("failed")}
+                  >
+                    <ArrowsClockwise size={18} />
+                    Thử lại và tiếp tục đến hết
+                  </button>
+                </>
+              )}
+              {newImageCount > 0 && (
+                <button
+                  className="button button-primary"
+                  onClick={() => void createBatch("new")}
+                >
+                  <Stack size={18} weight="fill" />
+                  {canceledImageCount
+                    ? `Tiếp tục ${newImageCount} ảnh đến hết`
+                    : `Tạo toàn bộ ${newImageCount} ảnh`}
+                </button>
+              )}
+                </>
+              )}
+            </div>
+          </div>
+
+          {extensionBridgeError && (
+            <div className="batch-error-alert" role="alert">
+              <WarningCircle size={24} weight="fill" />
+              <div>
+                <strong>Chuỗi {executorLabel} đã dừng vì lỗi</strong>
+                <span>{extensionBridgeError}</span>
+              </div>
+              <button
+                className="button button-danger"
+                disabled={isCreatingExtensionBatch}
+                onClick={() =>
+                  void (extensionBatchId
+                    ? reconnectImageExtension()
+                    : generateWithExtension(extensionExecutor))
+                }
+              >
+                <ArrowsClockwise size={18} />
+                Thử lại lượt này
+              </button>
+            </div>
+          )}
+
+          <div className="storyboard-media-toolbar">
+            <div>
+              <strong>Video theo thứ tự storyboard</strong>
+              <span>
+                Chọn nhiều file; hệ thống sắp tên theo số tự nhiên rồi gán lần
+                lượt cho B01, B02…
+              </span>
+            </div>
+            <label
+              className={`button button-quiet${
+                batchVideoUploadProgress ? " beat-action-disabled" : ""
+              }`}
+            >
+              <UploadSimple size={18} />
+              {batchVideoUploadProgress
+                ? `Đang nạp ${batchVideoUploadProgress.done}/${batchVideoUploadProgress.total}`
+                : "Nạp video hàng loạt"}
+              <input
+                type="file"
+                accept="video/mp4,video/webm,video/quicktime,video/x-m4v,video/*"
+                multiple
+                hidden
+                disabled={Boolean(batchVideoUploadProgress)}
+                onChange={(event) => {
+                  void uploadVideoBatch(Array.from(event.target.files || []));
+                  event.target.value = "";
+                }}
+              />
+            </label>
           </div>
 
           <div className={`storyboard-grid ${ratioClass}`}>
-            {project.beats.map((beat) => (
-              <article className="story-card" key={beat.id}>
+            {visibleBeats.map((beat) => {
+              const currentPrompts = buildBeatPrompts(
+                project.config,
+                project.references,
+                beat,
+                project.searchedImages,
+              );
+              return (
+                <article
+                className="story-card"
+                key={beat.id}
+                tabIndex={0}
+                onPaste={(event) => {
+                  const file = Array.from(event.clipboardData.files).find((item) =>
+                    item.type.startsWith("image/"),
+                  );
+                  if (file) {
+                    event.preventDefault();
+                    void uploadOutput(beat.id, file);
+                  }
+                }}
+              >
                 <BeatMediaTabs
                   beat={beat}
                   aspectRatio={project.config.aspectRatio}
@@ -1953,12 +2746,17 @@ function StoryboardStep({
                     beat.video.status === "generating" ||
                     beat.video.status === "queued"
                   }
+                  videoUploading={uploadingVideoIds.includes(beat.id)}
                   canCreateVideo={
                     Boolean(beat.outputImage) &&
                     !isBatchVideo &&
                     beat.video.status !== "generating"
                   }
                   onCreateVideo={() => void createVideo(beat)}
+                  onUploadVideo={(file) => void uploadVideoOutput(beat, file)}
+                  canUploadVideo={
+                    !isBatchVideo && !uploadingVideoIds.includes(beat.id)
+                  }
                   onRegenerateImage={() => void createKeyframe(beat)}
                   canRegenerateImage={
                     !isBatchGenerating && !generatingBeatIds.includes(beat.id)
@@ -1976,6 +2774,10 @@ function StoryboardStep({
                           ? "Bị lỗi"
                           : beat.generationStatus === "generating"
                             ? "Đang tạo"
+                            : beat.generationStatus === "queued"
+                              ? "Đang chờ"
+                              : beat.generationStatus === "canceled"
+                                ? "Đã dừng"
                             : "Chưa tạo"}
                     </span>
                   </div>
@@ -1987,7 +2789,10 @@ function StoryboardStep({
                     <button
                       className="button button-quiet button-small"
                       onClick={() =>
-                        void copyText(beat.imagePrompt, `image prompt B${beat.index}`)
+                        void copyText(
+                          currentPrompts.imagePrompt,
+                          `image prompt B${beat.index}`,
+                        )
                       }
                     >
                       <Copy size={16} />
@@ -1996,7 +2801,10 @@ function StoryboardStep({
                     <button
                       className="button button-quiet button-small"
                       onClick={() =>
-                        void copyText(beat.motionPrompt, `video prompt B${beat.index}`)
+                        void copyText(
+                          currentPrompts.motionPrompt,
+                          `video prompt B${beat.index}`,
+                        )
                       }
                     >
                       <Copy size={16} />
@@ -2016,9 +2824,16 @@ function StoryboardStep({
                       }}
                     />
                   </label>
+                  <button
+                    className="button button-quiet button-small"
+                    onClick={() => void pasteOutput(beat.id)}
+                  >
+                    Dán ảnh
+                  </button>
                 </div>
-              </article>
-            ))}
+                </article>
+              );
+            })}
           </div>
         </>
       ) : activePanel === "voice" ? (
@@ -2062,6 +2877,20 @@ function StoryboardStep({
           title={project.config.title}
           notify={notify}
           onClose={() => setIsExportPackOpen(false)}
+        />
+      )}
+
+      {extensionBatchComplete && (
+        <ExtensionBatchCompleteDialog
+          executor={extensionBatchComplete.executor}
+          completedCount={extensionBatchComplete.completedCount}
+          remainingCount={extensionBatchComplete.remainingCount}
+          onClose={() => setExtensionBatchComplete(null)}
+          onContinue={() => {
+            const executor = extensionBatchComplete.executor;
+            setExtensionBatchComplete(null);
+            void generateWithExtension(executor);
+          }}
         />
       )}
     </section>
@@ -2406,6 +3235,7 @@ function VideoGuide({
           end: beat.end,
           // Thiếu job là chip chương trên HUD trống — server không tự biết nhãn.
           job: beat.job,
+          overlay: beat.overlay,
           videoUrl: beat.video.url,
           videoDuration: beat.video.durationSeconds,
         })),
@@ -2835,6 +3665,11 @@ function SettingsDialog({
 }) {
   const [status, setStatus] = useState<ProviderStatus | null>(null);
   const [statusError, setStatusError] = useState("");
+  const [apiKeys, setApiKeys] = useState<
+    Partial<Record<keyof ProviderStatus, string>>
+  >({});
+  const [isSavingKeys, setIsSavingKeys] = useState(false);
+  const [keySaveError, setKeySaveError] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -2877,7 +3712,39 @@ function SettingsDialog({
     { key: "elevenlabs", name: "ElevenLabs", detail: "Voice master" },
     { key: "pexels", name: "Pexels", detail: "Ảnh tham chiếu" },
     { key: "serper", name: "Serper", detail: "Ảnh web dự phòng" },
+    { key: "replicate", name: "Replicate", detail: "Tạo video" },
+    { key: "groq", name: "Groq", detail: "Căn transcript" },
   ];
+
+  const saveDialog = async () => {
+    const changedKeys = Object.fromEntries(
+      Object.entries(apiKeys).filter(([, value]) => value?.trim()),
+    ) as Partial<Record<keyof ProviderStatus, string>>;
+    if (Object.keys(changedKeys).length) {
+      setIsSavingKeys(true);
+      setKeySaveError("");
+      try {
+        const result = await updateProviderKeys(changedKeys);
+        setStatus(result.providers);
+        setApiKeys({});
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Không lưu được API key.";
+        setKeySaveError(message);
+        setIsSavingKeys(false);
+        notify(message, "error");
+        return;
+      }
+      setIsSavingKeys(false);
+    }
+    notify(
+      Object.keys(changedKeys).length
+        ? "Đã lưu cấu hình và API key."
+        : "Đã lưu cấu hình AI.",
+      "success",
+    );
+    onClose();
+  };
 
   return (
     <div className="settings-layer" role="presentation" onMouseDown={onClose}>
@@ -2925,6 +3792,46 @@ function SettingsDialog({
         {statusError && <p className="settings-error">{statusError}</p>}
 
         <div className="settings-sections">
+          <div className="settings-section">
+            <div className="settings-section-title">
+              <Key size={21} />
+              <div>
+                <h3>API key</h3>
+                <p>
+                  Key được lưu riêng ở backend. Nhập key mới chỉ cho dịch vụ
+                  cần cập nhật; ô trống giữ nguyên giá trị hiện có.
+                </p>
+              </div>
+            </div>
+            <div className="form-grid two-cols api-key-grid">
+              {providers.map((provider) => (
+                <Field label={provider.name} key={provider.key}>
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={apiKeys[provider.key] || ""}
+                    onChange={(event) =>
+                      setApiKeys((current) => ({
+                        ...current,
+                        [provider.key]: event.target.value,
+                      }))
+                    }
+                    placeholder={
+                      status?.[provider.key]
+                        ? "Đã lưu — nhập key mới để thay thế"
+                        : "Chưa cấu hình"
+                    }
+                  />
+                </Field>
+              ))}
+            </div>
+            <p className="field-help api-key-security-note">
+              Vì lý do bảo mật, key đã lưu không được gửi lại trình duyệt và
+              không thể xem lại từ giao diện.
+            </p>
+            {keySaveError && <p className="settings-error">{keySaveError}</p>}
+          </div>
+
           <div className="settings-section">
             <div className="settings-section-title">
               <Scroll size={21} />
@@ -3017,10 +3924,22 @@ function SettingsDialog({
               checked={settings.imageSearchEnabled}
               onChange={(value) => update("imageSearchEnabled", value)}
             />
+            <div className="form-grid two-cols">
+              <ToggleRow
+                label="Dùng Pexels"
+                checked={settings.searchPexels}
+                onChange={(value) => update("searchPexels", value)}
+              />
+              <ToggleRow
+                label="Dùng Serper / Google Images"
+                checked={settings.searchSerper}
+                onChange={(value) => update("searchSerper", value)}
+              />
+            </div>
             <p className="field-help">
-              Pexels luôn được thử trước; chỉ khi Pexels không có kết quả mới rơi
-              sang Serper. Ảnh Serper là ảnh web chưa rõ bản quyền, chỉ nên dùng
-              làm tham chiếu bố cục vì model sẽ vẽ lại thành giấy cắt.
+              Hai nguồn chạy độc lập theo lựa chọn. Hệ thống dịch mọi keyword
+              sang tiếng Anh trước khi tìm. Ảnh Serper là ảnh web chưa rõ bản
+              quyền, chỉ nên dùng làm tham chiếu bố cục.
               {status && (
                 <>
                   {" "}
@@ -3028,6 +3947,48 @@ function SettingsDialog({
                   {status.serper ? "✓" : "✗"}.
                 </>
               )}
+            </p>
+          </div>
+
+          <div className="settings-section">
+            <div className="settings-section-title">
+              <Sparkle size={21} weight="fill" />
+              <div>
+                <h3>Browser image extensions</h3>
+                <p>
+                  Điều khiển cách VOX chuyển storyboard sang Auto ChatGPT Images
+                  hoặc Auto Gemini Images.
+                </p>
+              </div>
+            </div>
+            <Field label="Sau khi nạp batch">
+              <select
+                value={settings.chatgptExtensionMode}
+                onChange={(event) =>
+                  update(
+                    "chatgptExtensionMode",
+                    event.target.value as AppSettings["chatgptExtensionMode"],
+                  )
+                }
+              >
+                <option value="auto">Tự động nạp và chạy toàn bộ</option>
+                <option value="manual">Chỉ nạp vào Tạo ảnh hàng loạt</option>
+              </select>
+            </Field>
+            <ToggleRow
+              label="Mở tab mới cho mỗi batch VOX"
+              checked={settings.chatgptOpenNewConversation}
+              onChange={(value) => update("chatgptOpenNewConversation", value)}
+            />
+            <ToggleRow
+              label="Reset workspace VOX khi nhận batch mới"
+              checked={settings.chatgptResetWorkspace}
+              onChange={(value) => update("chatgptResetWorkspace", value)}
+            />
+            <p className="field-help">
+              Chế độ thủ công nạp đúng prompt và ảnh reference vào tab Tạo ảnh hàng loạt.
+              Bạn kiểm tra dữ liệu rồi bấm “Thêm và chạy”. Liên kết project/beat
+              vẫn được giữ để kết quả trả về đúng storyboard.
             </p>
           </div>
 
@@ -3190,13 +4151,15 @@ function SettingsDialog({
           <p>Thay đổi được lưu cục bộ và áp dụng cho lần tạo tiếp theo.</p>
           <button
             className="button button-primary"
-            onClick={() => {
-              notify("Đã lưu cấu hình AI.", "success");
-              onClose();
-            }}
+            onClick={() => void saveDialog()}
+            disabled={isSavingKeys}
           >
-            <Check size={18} weight="bold" />
-            Lưu cài đặt
+            {isSavingKeys ? (
+              <span className="button-loader" />
+            ) : (
+              <Check size={18} weight="bold" />
+            )}
+            {isSavingKeys ? "Đang lưu..." : "Lưu cài đặt"}
           </button>
         </footer>
       </section>
@@ -3211,6 +4174,35 @@ function readFileAsDataUrl(file: File) {
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+
+function readVideoMetadata(file: File) {
+  return new Promise<{
+    durationSeconds: number;
+    width: number;
+    height: number;
+  }>((resolve) => {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement("video");
+    const finish = (metadata = { durationSeconds: 0, width: 0, height: 0 }) => {
+      URL.revokeObjectURL(url);
+      resolve(metadata);
+    };
+    video.preload = "metadata";
+    video.onloadedmetadata = () =>
+      finish({
+        durationSeconds: Number.isFinite(video.duration) ? video.duration : 0,
+        width: video.videoWidth,
+        height: video.videoHeight,
+      });
+    video.onerror = () => finish();
+    video.src = url;
+  });
+}
+
+function orderedVideoName(beatIndex: number, originalName: string) {
+  const extension = /\.([a-z0-9]{2,5})$/i.exec(originalName)?.[1]?.toLowerCase() || "mp4";
+  return `B${beatIndex.toString().padStart(2, "0")}-video.${extension}`;
 }
 
 function downloadFile(name: string, content: string, type: string) {

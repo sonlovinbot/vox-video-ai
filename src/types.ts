@@ -3,7 +3,13 @@ export type AspectRatio = "9:16" | "1:1" | "16:9";
 export type Duration = 30 | 60 | 180;
 export type RefRole = "subject" | "style" | "character" | "environment";
 export type ProjectStatus = "draft" | "in_progress" | "completed";
-export type GenerationStatus = "idle" | "generating" | "completed" | "failed";
+export type GenerationStatus =
+  | "idle"
+  | "queued"
+  | "generating"
+  | "completed"
+  | "failed"
+  | "canceled";
 
 export interface ReferenceAsset {
   id: string;
@@ -13,6 +19,10 @@ export interface ReferenceAsset {
   previewUrl: string;
   role: RefRole;
   notes: string;
+  /** Mô tả thị giác do Gemini đọc trực tiếp từ ảnh trước khi viết script. */
+  visualDescription?: string;
+  /** Cụm từ tiếng Anh cụ thể để DeepSeek dùng khi lập searchQuery. */
+  visualKeywords?: string[];
 }
 
 export type RefLock = "identity" | "style" | "content";
@@ -60,6 +70,8 @@ export type VideoResolution = "480p" | "720p";
 
 export interface BeatVideo {
   status: VideoStatus;
+  /** Tên hiển thị theo thứ tự storyboard, ví dụ B01-video.mp4. */
+  name: string;
   /** "/generated/videos/<id>.mp4" — nguồn sự thật, tồn tại lâu dài. */
   url: string;
   /** Link Replicate. Chỉ để đối chiếu; Replicate xoá file sau 1 giờ. */
@@ -205,6 +217,7 @@ export type ScriptProvider = "deepseek" | "template";
 export type ImageProvider = "coachio" | "gemini";
 export type VoiceProvider = "elevenlabs" | "browser";
 export type ImageResolution = "1k" | "2k" | "4k";
+export type ChatGPTExtensionMode = "auto" | "manual";
 
 export interface AppSettings {
   scriptProvider: ScriptProvider;
@@ -219,7 +232,12 @@ export interface AppSettings {
   voiceIdVi: string;
   voiceIdEn: string;
   imageSearchEnabled: boolean;
+  searchPexels: boolean;
+  searchSerper: boolean;
   imageSearchCount: number;
+  chatgptExtensionMode: ChatGPTExtensionMode;
+  chatgptOpenNewConversation: boolean;
+  chatgptResetWorkspace: boolean;
   replicateModel: string;
   video: VideoSettings;
   groqModel: string;
