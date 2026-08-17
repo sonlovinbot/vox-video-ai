@@ -67,7 +67,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-export function createChatGPTBatch(payload: {
+export function createExtensionBatch(payload: {
   projectId: string;
   tasks: Array<{
     beatId: string;
@@ -84,7 +84,7 @@ export function createChatGPTBatch(payload: {
   });
 }
 
-export function getChatGPTBatch(batchId: string) {
+export function getExtensionBatch(batchId: string) {
   return apiFetch<ExtensionBatch>(
     `/api/extension/batches/${encodeURIComponent(batchId)}`,
   );
@@ -94,13 +94,25 @@ export function getProviderStatus() {
   return apiFetch<{ providers: ProviderStatus }>("/api/settings/status");
 }
 
+export type ApiKeyProvider = keyof ProviderStatus;
+
+export function updateProviderKeys(
+  keys: Partial<Record<ApiKeyProvider, string>>,
+) {
+  return apiFetch<{ providers: ProviderStatus }>("/api/settings/keys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keys }),
+  });
+}
+
 export function generateScriptWithAI(
   config: ProjectConfig,
   references: ReferenceAsset[],
   settings: AppSettings,
   signal?: AbortSignal,
 ) {
-  return apiFetch<{ beats: ScriptBeat[]; model: string }>("/api/script/generate", {
+  return apiFetch<{ beats: ScriptBeat[]; model: string; elapsedMs?: number }>("/api/script/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -199,6 +211,21 @@ export function generateVideo(
       model: settings.replicateModel,
       settings: settings.video,
     }),
+    signal,
+  });
+}
+
+export async function uploadVideo(file: File, signal?: AbortSignal) {
+  const form = new FormData();
+  form.append("video", file, file.name);
+  return apiFetch<{
+    url: string;
+    originalName: string;
+    mimeType: string;
+    byteLength: number;
+  }>("/api/video/upload", {
+    method: "POST",
+    body: form,
     signal,
   });
 }

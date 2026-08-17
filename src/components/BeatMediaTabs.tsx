@@ -3,6 +3,7 @@ import {
   FilmStrip,
   ImageSquare,
   Sparkle,
+  UploadSimple,
   WarningCircle,
 } from "@phosphor-icons/react";
 import type { AspectRatio, Beat } from "../types";
@@ -34,6 +35,9 @@ export function BeatMediaTabs({
   videoBusy,
   onCreateVideo,
   canCreateVideo,
+  onUploadVideo,
+  canUploadVideo,
+  videoUploading,
   onRegenerateImage,
   canRegenerateImage,
 }: {
@@ -46,6 +50,9 @@ export function BeatMediaTabs({
   videoBusy: boolean;
   onCreateVideo: () => void;
   canCreateVideo: boolean;
+  onUploadVideo: (file: File) => void;
+  canUploadVideo: boolean;
+  videoUploading: boolean;
   onRegenerateImage: () => void;
   canRegenerateImage: boolean;
 }) {
@@ -75,20 +82,6 @@ export function BeatMediaTabs({
           {hasVideo && <i className="beat-tab-dot" aria-hidden="true" />}
         </button>
 
-        {/* Mỗi tab có nút tạo lại riêng, tác động đúng thứ đang xem. */}
-        <button
-          className="beat-tab-regen"
-          title={
-            tab === "image"
-              ? "Tạo lại keyframe cho beat này"
-              : "Dựng lại video cho beat này"
-          }
-          disabled={tab === "image" ? !canRegenerateImage : !canCreateVideo}
-          onClick={() => (tab === "image" ? onRegenerateImage() : onCreateVideo())}
-        >
-          <ArrowsClockwise size={14} />
-          Tạo lại {tab === "image" ? "ảnh" : "video"}
-        </button>
       </div>
 
       <div className={`story-media ${frameClass}`}>
@@ -132,7 +125,11 @@ export function BeatMediaTabs({
             )}
             <span className="frame-skeleton" />
             <strong>
-              {beat.video.status === "queued" ? "Đang chờ lượt" : "Đang dựng video"}
+              {videoUploading
+                ? "Đang nạp video"
+                : beat.video.status === "queued"
+                  ? "Đang chờ lượt"
+                  : "Đang dựng video"}
             </strong>
           </div>
         ) : (
@@ -152,15 +149,6 @@ export function BeatMediaTabs({
                 </span>
               </>
             )}
-            {canCreateVideo && (
-              <button
-                className="button button-primary button-small"
-                onClick={onCreateVideo}
-              >
-                <Sparkle size={15} weight="fill" />
-                {beat.video.status === "failed" ? "Thử lại" : "Tạo video"}
-              </button>
-            )}
           </div>
         )}
 
@@ -174,6 +162,63 @@ export function BeatMediaTabs({
             ? `${beat.video.durationSeconds.toFixed(2)}s · ${beat.video.resolution}`
             : statusFor(beat, tab)}
         </span>
+      </div>
+
+      <div className="beat-media-actions">
+        <span className="beat-media-file">
+          {tab === "video"
+            ? beat.video.name || "Chưa có file video"
+            : beat.outputName || "Chưa có file ảnh"}
+        </span>
+        {tab === "image" ? (
+          <button
+            className="button button-quiet button-small"
+            disabled={!canRegenerateImage}
+            onClick={onRegenerateImage}
+          >
+            <ArrowsClockwise size={14} />
+            Tạo lại ảnh
+          </button>
+        ) : (
+          <>
+            <label
+              className={`button button-quiet button-small${
+                canUploadVideo ? "" : " beat-action-disabled"
+              }`}
+              title="Nạp video có sẵn cho beat này"
+            >
+              <UploadSimple size={14} />
+              {videoUploading ? "Đang nạp" : "Nạp video"}
+              <input
+                type="file"
+                accept="video/mp4,video/webm,video/quicktime,video/x-m4v,video/*"
+                hidden
+                disabled={!canUploadVideo}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) onUploadVideo(file);
+                  event.target.value = "";
+                }}
+              />
+            </label>
+            <button
+              className="button button-primary button-small"
+              disabled={!canCreateVideo}
+              onClick={onCreateVideo}
+            >
+              {hasVideo ? (
+                <ArrowsClockwise size={14} />
+              ) : (
+                <Sparkle size={14} weight="fill" />
+              )}
+              {hasVideo
+                ? "Tạo lại video"
+                : beat.video.status === "failed"
+                  ? "Thử lại"
+                  : "Tạo video"}
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

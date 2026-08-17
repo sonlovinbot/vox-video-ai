@@ -70,6 +70,8 @@ export type VideoResolution = "480p" | "720p";
 
 export interface BeatVideo {
   status: VideoStatus;
+  /** Tên hiển thị theo thứ tự storyboard, ví dụ B01-video.mp4. */
+  name: string;
   /** "/generated/videos/<id>.mp4" — nguồn sự thật, tồn tại lâu dài. */
   url: string;
   /** Link Replicate. Chỉ để đối chiếu; Replicate xoá file sau 1 giờ. */

@@ -5,7 +5,7 @@ const SETTINGS_KEY = "vox-style-video-settings-v2";
 
 export const defaultSettings: AppSettings = {
   scriptProvider: "deepseek",
-  deepseekModel: "deepseek-v4-pro",
+  deepseekModel: "deepseek-v4-flash",
   imageProvider: "coachio",
   coachioModel: "gpt_image_2",
   geminiModel: "gemini-3.1-flash-image",
@@ -36,6 +36,13 @@ export function loadSettings(): AppSettings {
     return {
       ...defaultSettings,
       ...parsed,
+      // v4-pro từng là mặc định của app, nhưng bật model lớn cho JSON kịch bản
+      // ngắn làm thời gian chờ tăng mạnh. Tự chuyển bản mặc định cũ sang Flash;
+      // các model tuỳ chỉnh khác của user vẫn được giữ nguyên.
+      deepseekModel:
+        parsed.deepseekModel === "deepseek-v4-pro"
+          ? "deepseek-v4-flash"
+          : parsed.deepseekModel || defaultSettings.deepseekModel,
       // Merge nông sẽ ghi đè cả object video bằng bản lưu thiếu field.
       video: { ...defaultSettings.video, ...(parsed.video || {}) },
     };

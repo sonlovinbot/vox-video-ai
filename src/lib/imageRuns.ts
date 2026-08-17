@@ -2,6 +2,9 @@ import type { Beat } from "../types";
 
 export type ImageRunMode = "new" | "failed";
 
+/** Một lượt extension đủ lớn để xử lý storyboard 60 giây trong một lần. */
+export const EXTENSION_IMAGE_BATCH_SIZE = 12;
+
 export function selectImageRunCandidates(
   beats: Beat[],
   mode: ImageRunMode,

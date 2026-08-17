@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Beat } from "../types";
 import { generateBeats, defaultConfig } from "./workflow";
 import {
+  EXTENSION_IMAGE_BATCH_SIZE,
   imageRunContinuation,
   selectImageRunCandidates,
   splitImageRunWaves,
@@ -19,10 +20,12 @@ function beats(count: number) {
 }
 
 describe("image run planning", () => {
-  it("splits the entire storyboard into sequential waves of five", () => {
-    expect(splitImageRunWaves(beats(12)).map((wave) => wave.length)).toEqual([
-      5, 5, 2,
-    ]);
+  it("splits extension work into waves of twelve", () => {
+    expect(
+      splitImageRunWaves(beats(25), EXTENSION_IMAGE_BATCH_SIZE).map(
+        (wave) => wave.length,
+      ),
+    ).toEqual([12, 12, 1]);
   });
 
   it("new mode excludes failed and completed beats", () => {

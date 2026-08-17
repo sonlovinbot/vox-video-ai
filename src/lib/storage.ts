@@ -50,6 +50,10 @@ function normalizeVideo(video: Partial<BeatVideo> | undefined): BeatVideo {
 function normalizeBeat(beat: Partial<Beat>, index: number): Beat {
   const imageInFlight =
     beat.generationStatus === "generating" || beat.generationStatus === "queued";
+  const normalizedVideo = normalizeVideo(beat.video);
+  if (!normalizedVideo.name && normalizedVideo.url) {
+    normalizedVideo.name = `B${String(beat.index || index + 1).padStart(2, "0")}-video.mp4`;
+  }
   return {
     id: beat.id || crypto.randomUUID(),
     index: beat.index || index + 1,
@@ -70,7 +74,7 @@ function normalizeBeat(beat: Partial<Beat>, index: number): Beat {
     generationError: beat.generationError || "",
     imageProvider: beat.imageProvider || "",
     refPlan: normalizeRefPlan(beat.refPlan),
-    video: normalizeVideo(beat.video),
+    video: normalizedVideo,
     apiMotionPrompt: beat.apiMotionPrompt || "",
   };
 }

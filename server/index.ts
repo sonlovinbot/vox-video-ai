@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import express from "express";
 import dotenv from "dotenv";
+import multer from "multer";
 import { GoogleGenAI, Modality } from "@google/genai";
 import {
   isSafeImageUrl,
@@ -27,6 +28,11 @@ import { promisify } from "node:util";
 import ffmpegStatic from "ffmpeg-static";
 import type { VideoSettings } from "../src/types";
 import { createExtensionRouter } from "./extensionBatches";
+import {
+  API_KEY_ENV_NAMES,
+  updateEnvContent,
+  type ApiKeyProvider,
+} from "./apiKeys";
 
 dotenv.config({ path: ".env.local", quiet: true });
 dotenv.config({ quiet: true });
@@ -41,6 +47,8 @@ const refsDir = path.join(generatedDir, "refs");
 const videosDir = path.join(generatedDir, "videos");
 const audioDir = path.join(generatedDir, "audio");
 const rendersDir = path.join(generatedDir, "renders");
+const localEnvFile = path.resolve(currentDir, "../.env.local");
+if (fs.existsSync(localEnvFile)) fs.chmodSync(localEnvFile, 0o600);
 
 app.use(express.json({ limit: "80mb" }));
 fs.mkdirSync(refsDir, { recursive: true });
@@ -49,6 +57,14 @@ fs.mkdirSync(audioDir, { recursive: true });
 fs.mkdirSync(rendersDir, { recursive: true });
 app.use("/generated", express.static(generatedDir));
 app.use("/api/extension", createExtensionRouter(generatedDir));
+
+const manualVideoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 250 * 1024 * 1024, files: 1 },
+  fileFilter: (_request, file, callback) => {
+    callback(null, file.mimetype.startsWith("video/"));
+  },
+});
 
 class HttpError extends Error {
   status: number;
@@ -104,19 +120,58 @@ function dataUrlParts(dataUrl: string) {
   return { mimeType: match[1], data: match[2] };
 }
 
+function currentProviderStatus() {
+  return Object.fromEntries(
+    Object.entries(API_KEY_ENV_NAMES).map(([provider, envName]) => [
+      provider,
+      Boolean(process.env[envName]?.trim()),
+    ]),
+  );
+}
+
 app.get("/api/settings/status", (_request, response) => {
-  response.json({
-    providers: {
-      coachio: Boolean(process.env.COACHIO_API_KEY),
-      gemini: Boolean(process.env.GEMINI_API_KEY),
-      deepseek: Boolean(process.env.DEEPSEEK_API_KEY),
-      elevenlabs: Boolean(process.env.ELEVENLABS_API_KEY),
-      pexels: Boolean(process.env.PEXELS_API_KEY),
-      serper: Boolean(process.env.SERPER_API_KEY),
-      replicate: Boolean(process.env.REPLICATE_API_TOKEN),
-      groq: Boolean(process.env.GROQ_API_KEY),
-    },
-  });
+  response.json({ providers: currentProviderStatus() });
+});
+
+app.post("/api/settings/keys", (request, response, next) => {
+  try {
+    const input = request.body?.keys;
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new HttpError(400, "Danh sách API key không hợp lệ.");
+    }
+    const updates: Partial<Record<ApiKeyProvider, string>> = {};
+    for (const provider of Object.keys(API_KEY_ENV_NAMES) as ApiKeyProvider[]) {
+      if (!(provider in input)) continue;
+      const value = String(input[provider] || "").trim();
+      if (!value) continue;
+      if (value.length > 20_000 || /[\r\n]/.test(value)) {
+        throw new HttpError(400, `API key ${provider} không hợp lệ.`);
+      }
+      updates[provider] = value;
+    }
+    if (!Object.keys(updates).length) {
+      throw new HttpError(400, "Hãy nhập ít nhất một API key mới.");
+    }
+
+    const current = fs.existsSync(localEnvFile)
+      ? fs.readFileSync(localEnvFile, "utf8")
+      : "";
+    const tempFile = `${localEnvFile}.${process.pid}.tmp`;
+    fs.writeFileSync(tempFile, updateEnvContent(current, updates), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    fs.renameSync(tempFile, localEnvFile);
+    fs.chmodSync(localEnvFile, 0o600);
+    for (const [provider, value] of Object.entries(updates) as Array<
+      [ApiKeyProvider, string]
+    >) {
+      process.env[API_KEY_ENV_NAMES[provider]] = value;
+    }
+    response.json({ providers: currentProviderStatus() });
+  } catch (error) {
+    next(error);
+  }
 });
 
 async function searchPexels(query: string, count: number, aspectRatio: string) {
@@ -158,7 +213,9 @@ async function translateSearchQuery(query: string) {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: process.env.DEEPSEEK_MODEL || "deepseek-chat",
+        model: process.env.DEEPSEEK_MODEL || "deepseek-v4-flash",
+        thinking: { type: "disabled" },
+        max_tokens: 80,
         temperature: 0,
         messages: [
           {
@@ -280,7 +337,9 @@ app.post("/api/brief/suggest", async (request, response, next) => {
   try {
     const apiKey = requireEnv("DEEPSEEK_API_KEY");
     const baseUrl = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
-    const model = String(request.body?.model || process.env.DEEPSEEK_MODEL || "deepseek-chat");
+    const model = String(
+      request.body?.model || process.env.DEEPSEEK_MODEL || "deepseek-v4-flash",
+    );
     const title = String(request.body?.title || "").trim();
     const label = String(request.body?.coverEyebrow || "GIẢI THÍCH").trim();
     const language = String(request.body?.language || "Tiếng Việt");
@@ -304,10 +363,13 @@ Trả JSON: {"context":"...","objective":"...","audience":"...","callToAction":"
 
     const aiResponse = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
+      signal: AbortSignal.timeout(20_000),
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
         model,
+        thinking: { type: "disabled" },
         temperature: 0.6,
+        max_tokens: 900,
         response_format: { type: "json_object" },
         messages: [
           {
@@ -331,6 +393,10 @@ Trả JSON: {"context":"...","objective":"...","audience":"...","callToAction":"
       model,
     });
   } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      next(new HttpError(504, "Gợi ý brief quá 20 giây. Vui lòng thử lại."));
+      return;
+    }
     next(error);
   }
 });
@@ -375,7 +441,13 @@ Chỉ trả JSON: {"analyses":[{"id":"","description":"","keywords":[""]}]}.`,
     const result = await ai.models.generateContent({
       model,
       contents: [{ role: "user", parts }],
-      config: { responseMimeType: "application/json" },
+      config: {
+        responseMimeType: "application/json",
+        maxOutputTokens: 1_800,
+        // Gemini 2.5 Flash mặc định dùng dynamic thinking. Nhận diện vật thể
+        // và keyword là tác vụ trích xuất, không cần tiêu token suy luận.
+        thinkingConfig: { thinkingBudget: 0 },
+      },
     });
     const content = result.candidates?.[0]?.content?.parts
       ?.map((part) => part.text || "")
@@ -402,9 +474,12 @@ Chỉ trả JSON: {"analyses":[{"id":"","description":"","keywords":[""]}]}.`,
 
 app.post("/api/script/generate", async (request, response, next) => {
   try {
+    const startedAt = Date.now();
     const apiKey = requireEnv("DEEPSEEK_API_KEY");
     const baseUrl = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
-    const model = String(request.body?.model || process.env.DEEPSEEK_MODEL || "deepseek-chat");
+    const model = String(
+      request.body?.model || process.env.DEEPSEEK_MODEL || "deepseek-v4-flash",
+    );
     const config = request.body?.config;
     if (!config?.context?.trim()) throw new HttpError(400, "Context không được để trống.");
     const beatCount = config.duration === 180 ? 36 : config.duration === 60 ? 11 : 6;
@@ -460,6 +535,10 @@ job hiện lên đầu video như nhãn chương, nên nó phải nói NỘI DUN
 - Không tự bịa số liệu, mốc thời gian, vị trí dẫn đầu hoặc claim chưa có trong context.
 - Nếu context chưa đủ dữ kiện, dùng cách diễn đạt trung tính và đánh dấu [CẦN NGUỒN] trong narration.
 - Visual phải phù hợp flat 2D editorial paper-collage và giữ continuity giữa các beat.
+- Visual phải là art direction CỤ THỂ cho một poster: nêu 1 hero cutout, 1 cơ chế thị giác, tối đa 2-3 props hỗ trợ và cách sắp xếp foreground/midground/background. Tránh các mô tả chung chung như "một collage đẹp".
+- Tạo nhịp hình có chủ đích: beat đầu dùng crop gần/oversized để hook; các beat giải thích luân phiên wide, medium, detail; beat cuối mở rộng và chừa negative space. Không lặp cùng một bố cục ở hai beat liền nhau.
+- Mỗi beat dùng một nền giấy màu phẳng và bảng màu giới hạn 2 màu mực + đen/kem. Cho palette thay đổi theo mạch cảm xúc nhưng giữ nguyên paper grain, halftone, edge roughness và hướng shadow.
+- transition phải mô tả đúng MỘT hành động paper-native có thể quay được: slide, hinge, pivot, tear-reveal, stamp, unfold hoặc settle; ghi rõ element nào chuyển động và điểm dừng. Không dùng orbit, morph, melt, zoom giật hoặc mô tả trừu tượng.
 - Overlay tối đa 7 từ, có thể để trống.
 
 PHÂN BỔ REFERENCE (refPlan)
@@ -478,13 +557,18 @@ Mỗi beat phải có refPlan gồm useUploads, searchQuery, newElements.
 Chỉ trả JSON hợp lệ theo dạng {"beats":[{"job":"","narration":"","visual":"","transition":"","overlay":"","refPlan":{"useUploads":[],"searchQuery":"","newElements":[]}}]}.`;
     const aiResponse = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
+      signal: AbortSignal.timeout(45_000),
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model,
-        temperature: 0.55,
+        // V4 bật thinking theo mặc định. Kịch bản ở đây chỉ là JSON 6-36 beat,
+        // nên tắt reasoning để giảm đáng kể time-to-first/last-token.
+        thinking: { type: "disabled" },
+        temperature: 0.35,
+        max_tokens: beatCount <= 6 ? 1_800 : beatCount <= 11 ? 3_200 : 8_000,
         response_format: { type: "json_object" },
         messages: [
           {
@@ -503,8 +587,17 @@ Chỉ trả JSON hợp lệ theo dạng {"beats":[{"job":"","narration":"","visu
     if (!Array.isArray(parsed.beats) || parsed.beats.length !== beatCount) {
       throw new HttpError(502, `DeepSeek không trả đúng ${beatCount} beat.`);
     }
-    response.json({ beats: parsed.beats, model });
+    response.json({ beats: parsed.beats, model, elapsedMs: Date.now() - startedAt });
   } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      next(
+        new HttpError(
+          504,
+          "Tạo kịch bản quá 45 giây. Vui lòng thử lại; hệ thống đã dừng yêu cầu chậm để không bắt bạn chờ vô hạn.",
+        ),
+      );
+      return;
+    }
     next(error);
   }
 });
@@ -1318,6 +1411,41 @@ app.post("/api/video/generate", async (request, response, next) => {
     next(error);
   }
 });
+
+app.post(
+  "/api/video/upload",
+  manualVideoUpload.single("video"),
+  (request, response, next) => {
+    try {
+      if (!request.file) {
+        throw new HttpError(400, "Hãy chọn một file video hợp lệ.");
+      }
+      const extensionByMime: Record<string, string> = {
+        "video/mp4": "mp4",
+        "video/webm": "webm",
+        "video/quicktime": "mov",
+        "video/x-m4v": "m4v",
+      };
+      const sourceExtension = path
+        .extname(request.file.originalname)
+        .slice(1)
+        .toLowerCase();
+      const extension =
+        extensionByMime[request.file.mimetype] ||
+        (/^[a-z0-9]{2,5}$/.test(sourceExtension) ? sourceExtension : "mp4");
+      const fileName = `${crypto.randomUUID()}.${extension}`;
+      fs.writeFileSync(path.join(videosDir, fileName), request.file.buffer);
+      response.json({
+        url: `/generated/videos/${fileName}`,
+        originalName: request.file.originalname,
+        mimeType: request.file.mimetype,
+        byteLength: request.file.size,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 app.post("/api/voice/transcribe", async (request, response, next) => {
   try {

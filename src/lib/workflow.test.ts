@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildBeatPrompts,
+  buildStylePrompt,
   defaultConfig,
   generateBeats,
   hydrateStoryboard,
@@ -25,6 +26,31 @@ describe("workflow", () => {
     const { motionPrompt } = buildBeatPrompts(defaultConfig, [], beat);
     expect(motionPrompt).toContain("Silent video");
     expect(motionPrompt).toContain("rigid flat paper layer");
+    expect(motionPrompt).toContain("one smooth continuous camera behaviour");
+    expect(motionPrompt).toContain("living printed poster");
+  });
+
+  it("builds a consistent professional Vox visual bible", () => {
+    const prompt = buildStylePrompt(defaultConfig, []);
+    expect(prompt).toContain("risograph overprint");
+    expect(prompt).toContain("foreground, midground and background");
+    expect(prompt).toContain("limited palette of two chromatic inks");
+    expect(prompt).toContain("not like an adjective-heavy AI collage");
+  });
+
+  it("varies shot grammar and palette between adjacent beats", () => {
+    const [first, second] = generateBeats(defaultConfig);
+    const firstPrompts = buildBeatPrompts(defaultConfig, [], first);
+    const secondPrompts = buildBeatPrompts(defaultConfig, [], second);
+
+    expect(firstPrompts.imagePrompt).toContain("CLOSE hero crop");
+    expect(firstPrompts.imagePrompt).toContain("signal red");
+    expect(secondPrompts.imagePrompt).toContain("WIDE system view");
+    expect(secondPrompts.imagePrompt).toContain("cobalt blue");
+    expect(firstPrompts.motionPrompt).toContain("one very slow push-in");
+    expect(secondPrompts.motionPrompt).toContain("left-to-right lateral move");
+    expect(firstPrompts.apiMotionPrompt).toContain("tactile risograph grain");
+    expect(firstPrompts.apiMotionPrompt).toContain("confident editorial pacing");
   });
 
   it("không áp luật preserve identity cho beat không có ref chủ thể", () => {

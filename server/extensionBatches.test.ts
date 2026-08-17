@@ -29,7 +29,7 @@ function batchInput() {
           { id: "ref-2", name: "second.png", url: "data:image/png;base64,Ag==" },
           { id: "ref-1", name: "first.png", url: "data:image/png;base64,AQ==" },
         ],
-        expectedOutputName: "B01-chatgpt.png",
+        expectedOutputName: "B01-gemini.png",
       },
     ],
   };
